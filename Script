@@ -578,7 +578,7 @@ local function advisorRoutes(team: any): {any}
                 if length > 0.001 then table.insert(segments, {a = a, d = d, square = d:Dot(d), length = length, start = travelled}); travelled += length end
             end
         end
-        if travelled > 0 then table.insert(routes, {path = route, segments = segments, length = travelled}) end
+        if travelled > 0 then table.insert(routes, {id = tostring(key), path = route, segments = segments, length = travelled}) end
         if #routes >= 8 then break end
     end
     assert(#routes > 0, "No usable enemy paths were found.")
@@ -1389,11 +1389,12 @@ function StrategyModel.stage(stats: any, name: string, cost: number, invested: n
     local unitDps = tonumber(stats._UnitDps) or 0
     if attrs.PistolCrookSpawnTime then unitDps += math.min(3, tonumber(attrs.PistolCrookCap) or 3) * 5 * 0.4 end
     if attrs.TommyCrookSpawnTime then unitDps += math.min(2, tonumber(attrs.TommyCrookCap) or 2) * 25 * 0.4 end
+    if pellets > 1 then warning = "pellet spread and piercing are approximated" end
     if unitDps > 0 then warning = "spawned units are conservatively approximated" end
     if name == "DJ Booth" then dps = 0 end
     if name == "Commander" then warning = "support ability benefits are not fully simulated" end
     if damage == 0 and unitDps == 0 and (tonumber(stats.Income) or 0) == 0 and name ~= "DJ Booth" and name ~= "Commander" then warning = "utility or production mechanics are not fully modeled" end
-    return {range = range, deadzone = math.max(0, tonumber(attrs.Deadzone) or 0), damage = damage, dps = dps, unitDps = unitDps, globalUnits = stats._GlobalUnits == true, income = tonumber(stats.Income) or 0, cooldown = cooldown, cost = cost, invested = invested, hidden = stats.Detections and stats.Detections.HiddenDetection == true, flying = stats.Detections and stats.Detections.FlyingDetection == true, lead = stats.Detections and stats.Detections.LeadDetection == true, splash = tonumber(attrs.ExplosionRadius) or tonumber(attrs.SplashRadius) or 0, limit = tonumber(stats.Limit) or 40, attrs = attrs, warning = warning}
+    return {range = range, deadzone = math.max(0, tonumber(attrs.Deadzone) or 0), damage = damage, dps = dps, unitDps = unitDps, pierce = if pellets > 1 then 3 else 1, spread = tonumber(attrs.Spread) or 0, globalUnits = stats._GlobalUnits == true, income = tonumber(stats.Income) or 0, cooldown = cooldown, cost = cost, invested = invested, hidden = stats.Detections and stats.Detections.HiddenDetection == true, flying = stats.Detections and stats.Detections.FlyingDetection == true, lead = stats.Detections and stats.Detections.LeadDetection == true, splash = tonumber(attrs.ExplosionRadius) or tonumber(attrs.SplashRadius) or 0, limit = tonumber(stats.Limit) or 40, attrs = attrs, warning = warning}
 end
 function StrategyModel.intervals(point: Vector3, radius: number, minimum: number, routes: {any}): any
     local all = {}
@@ -1412,7 +1413,11 @@ function StrategyModel.intervals(point: Vector3, radius: number, minimum: number
             local ia, ib = bounds(math.min(radius, minimum))
             ia, ib = math.max(enter, ia), math.min(leave, ib)
             local function add(a: number, z: number)
-                if z > a then table.insert(intervals, {segment.start + a * segment.length, segment.start + z * segment.length}) end
+                if z <= a then return end
+                local first, last = segment.start + a * segment.length, segment.start + z * segment.length
+                local previous = intervals[#intervals]
+                if previous and first <= previous[2] + 0.0001 then previous[2] = math.max(previous[2], last)
+                else table.insert(intervals, {first, last}) end
             end
             if ib > ia then add(enter, ia); add(ib, leave) else add(enter, leave) end
         end
@@ -1424,9 +1429,12 @@ function StrategyModel.contains(intervals: any, route: number, distance: number)
     for _, span in ipairs(intervals[route] or {}) do if distance >= span[1] and distance <= span[2] then return true end end
     return false
 end
-function StrategyModel.coverage(intervals: any, routes: {any}, after: number?): number
+function StrategyModel.coverage(intervals: any, routes: {any}, after: any?): number
     local amount = 0
-    for index in ipairs(routes) do for _, span in ipairs(intervals[index] or {}) do amount += math.max(0, span[2] - math.max(span[1], after or 0)) end end
+    for index in ipairs(routes) do
+        local threshold = if type(after) == "table" then after[index] or 0 else after or 0
+        for _, span in ipairs(intervals[index] or {}) do amount += math.max(0, span[2] - math.max(span[1], threshold)) end
+    end
     return amount / math.max(1, #routes)
 end
 function StrategyModel.spectra(profile: any): any
@@ -1458,13 +1466,35 @@ function StrategyModel.power(stage: any, wave: number, policy: any, spectrum: an
         if wave >= 20 and not stage.flying then damage *= 0.9 end
     end
     if stage.splash > 0 then damage *= 1 + math.min(2, stage.splash / 5) * math.min(1, wave / 15) end
+    if (stage.pierce or 1) > 1 then damage *= 1 + 0.45 * (stage.pierce - 1) * math.min(1, wave / 12) end
     return damage
+end
+function StrategyModel.spawnRoutes(model: any, info: any, ordinal: number, bossRoute: number?): {number}
+    if model.allPaths and not info.spawnOnce and not info.boss then
+        local routes = {}
+        for index in ipairs(model.routes) do table.insert(routes, index) end
+        return routes
+    end
+    if info.spawnOnce or info.boss then return {math.clamp(bossRoute or 1, 1, #model.routes)} end
+    return {(ordinal - 1) % #model.routes + 1}
+end
+function StrategyModel.secondaryHit(stage: any, origin: Vector3, target: Vector3, victim: Vector3): number
+    if stage.splash > 0 and (victim - target).Magnitude <= stage.splash then return 1 end
+    if (stage.pierce or 1) <= 1 then return 0 end
+    local direction = target - origin
+    if direction.Magnitude < 0.001 then return 0 end
+    direction = direction.Unit
+    local delta = victim - origin
+    local forward = delta:Dot(direction)
+    local width = 1 + math.tan(math.rad(math.clamp(stage.spread or 5, 5, 60) * 0.5)) * forward
+    if forward > 0 and delta.Magnitude <= stage.range and (delta - direction * forward).Magnitude <= width then return 0.45 end
+    return 0
 end
 function StrategyModel.rank(result: any, stressed: any): number
     local wins = (if result.won then 1 else 0) + (if stressed.won then 1 else 0)
     return wins * 100000000000 + result.reached * 100000000 + result.cleared * 1000000 + stressed.reached * 10000 + stressed.cleared * 100 + math.clamp(math.min(result.health, stressed.health), 0, 1000) * 0.001 + math.min(9000, result.killed) * 0.000001 - stressed.bossProgress * 0.00001
 end
-function StrategyModel.action(defs: {any}, towers: {any}, cash: number, wave: number, policy: any, routes: {any}, cap: number, after: number?, context: any?): any
+function StrategyModel.action(defs: {any}, towers: {any}, cash: number, wave: number, policy: any, routes: {any}, cap: number, after: any?, context: any?): any
     local best: any = nil
     local reserve: any = nil
     context = context or {}
@@ -1481,13 +1511,33 @@ function StrategyModel.action(defs: {any}, towers: {any}, cash: number, wave: nu
         if tower.def.kind == "damage" then attacks += 1 end
         if tower.def.kind == "economy" then farms += 1 end
     end
+    local routeWeights = {}
+    for index, route in ipairs(routes) do
+        local strength = 0
+        for _, tower in ipairs(towers) do
+            local stage = tower.def.stages[tower.level + 1]
+            local spans = tower.def.sites[tower.site].intervals[tower.level + 1][index] or {}
+            local covered = 0
+            for _, span in ipairs(spans) do covered += span[2] - span[1] end
+            strength += power(stage) * covered / math.max(1, route.length)
+        end
+        routeWeights[index] = if #routes > 1 then 1 / (1 + strength / (if context.allPaths then 12 else 25)) else 1
+    end
+    local function coverage(intervals: any): number
+        local amount = 0
+        for index in ipairs(routes) do
+            local threshold = if type(after) == "table" then after[index] or 0 else after or 0
+            for _, span in ipairs(intervals[index] or {}) do amount += math.max(0, span[2] - math.max(span[1], threshold)) * routeWeights[index] end
+        end
+        return amount / math.max(1, #routes)
+    end
     local function offer(action: any, score: number)
         if action.cost < 0 or (context.blocked and context.blocked(action)) then return end
         if policy.favorite == action.def.name then score *= policy.favoriteWeight or 1.4 end
         if action.cost > cash + 0.001 then
             local rate = tonumber(context.incomeRate) or math.max(4, wave * 3)
             local wait = (action.cost - cash) / math.max(0.1, rate)
-            score /= 1 + wait / 10
+            score /= 1 + wait / (policy.savePatience or 10)
             if attacks > 0 and wait <= (policy.saveSeconds or 0) and score > 0 and (not reserve or score > reserve.score) then reserve = {score = score, action = action} end
             return
         end
@@ -1498,15 +1548,15 @@ function StrategyModel.action(defs: {any}, towers: {any}, cash: number, wave: nu
         local nextStage = tower.def.stages[tower.level + 2]
         if nextStage and tower.canUpgrade ~= false then
             local site = tower.def.sites[tower.site]
-            local oldCoverage = StrategyModel.coverage(site.intervals[tower.level + 1], routes, after)
-            local newCoverage = StrategyModel.coverage(site.intervals[tower.level + 2], routes, after)
+            local oldCoverage = coverage(site.intervals[tower.level + 1])
+            local newCoverage = coverage(site.intervals[tower.level + 2])
             local gain = power(nextStage) * newCoverage - power(stage) * oldCoverage
             local detection = if wave >= 5 and nextStage.hidden and not stage.hidden then math.max(5, nextStage.dps) * newCoverage * 0.7 else 0
             local cost = tower.upgradeCost or nextStage.cost
             local score = (gain + detection) / math.max(1, cost) * policy.upgrade
             local later = tower.def.stages[tower.level + 3]
             if later then
-                local laterCoverage = StrategyModel.coverage(site.intervals[tower.level + 3], routes, after)
+                local laterCoverage = coverage(site.intervals[tower.level + 3])
                 local futureGain = power(later, 1) * laterCoverage - power(stage) * oldCoverage
                 score = math.max(score, futureGain / math.max(1, cost + later.cost) * policy.upgrade * 0.85)
             end
@@ -1518,7 +1568,8 @@ function StrategyModel.action(defs: {any}, towers: {any}, cash: number, wave: nu
     local placeCap = math.min(cap, math.max(2, math.floor(policy.earlyCap + wave * policy.buildRate)))
     for _, def in ipairs(if #towers >= placeCap then {} else defs) do
         local stage = def.stages[1]
-        if (names[def.name] or 0) >= stage.limit then continue end
+        local plannedLimit = policy.limits and policy.limits[def.name] or cap
+        if (names[def.name] or 0) >= math.min(stage.limit, plannedLimit) then continue end
         if def.kind == "support" and (attacks < policy.supportAt or wave < 7) then continue end
         if def.kind == "economy" and (attacks < 2 or wave < 4 or wave > 20 or farms >= math.min(6, math.ceil(wave / 4))) then continue end
         for siteIndex, site in ipairs(def.sites) do
@@ -1529,10 +1580,10 @@ function StrategyModel.action(defs: {any}, towers: {any}, cash: number, wave: nu
                 end
                 if occupied then continue end
             end
-            local coverage = StrategyModel.coverage(site.intervals[1], routes, after)
-            local score = power(stage) * coverage / math.max(1, def.price) * policy.place
+            local covered = coverage(site.intervals[1])
+            local score = power(stage) * covered / math.max(1, def.price) * policy.place
             local maximum = def.stages[#def.stages]
-            local future = power(maximum, 4) * StrategyModel.coverage(site.intervals[#def.stages], routes, after)
+            local future = power(maximum, 4) * coverage(site.intervals[#def.stages])
             score = math.max(score, future / math.max(1, maximum.invested) * policy.place * 0.65)
             local preference = if siteIndex == policy.site then 1.15 else 1
             score *= preference
@@ -1569,10 +1620,28 @@ function StrategyModel.simulate(model: any, policy: any, stress: any, checkpoint
     local killed, leaked, cleared = 0, 0, 0
     local bossRemaining = 0
     local bossActions = {summon = 0, stomp = 0, flask = 0, toxic = 0, rage = 0}
+    local scheduledByRoute = {}
+    for index in ipairs(model.routes) do scheduledByRoute[index] = 0 end
     local steps = 0
     local function spawn(typeIndex: number, route: number, distance: number?)
         local info = model.profile.types[typeIndex]
         table.insert(enemies, {info = info, hp = info.health * stress.health, max = info.health * stress.health, route = route, distance = distance or 0, paid = 0, born = time, nextSummon = time + summon.first, nextStomp = time + stomp.first, nextFlask = time + flask.first, nextToxic = time + toxic.first, pauseUntil = 0, flyingUntil = 0, rageUntil = 0})
+    end
+    local function position(enemy: any): Vector3
+        if enemy.positionTime ~= time then
+            enemy.positionTime = time
+            enemy.position = model.routes[enemy.route].path:GetScalar(enemy.distance)
+        end
+        return enemy.position
+    end
+    local function hurt(enemy: any, damage: number)
+        enemy.hp -= damage * 100 / (100 + math.max(0, enemy.info.defense))
+        local quantum = enemy.info.threshold or 0
+        if quantum > 0 then
+            local paid = math.clamp(math.floor((1 - math.max(0, enemy.hp) / enemy.max) / quantum + 0.000001) * quantum, 0, 1)
+            cash += math.max(0, paid - enemy.paid) * (enemy.info.reward or 0) / model.players
+            enemy.paid = paid
+        end
     end
     local function nextWave()
         if wave > 0 then
@@ -1596,22 +1665,26 @@ function StrategyModel.simulate(model: any, policy: any, stress: any, checkpoint
         local entries = model.profile.waves[wave]
         if not entries then break end
         while entries[spawnIndex] and entries[spawnIndex][1] <= time - waveStart do
-            spawn(entries[spawnIndex][2], (spawnIndex - 1) % #model.routes + 1)
+            local typeIndex = entries[spawnIndex][2]
+            for _, route in ipairs(StrategyModel.spawnRoutes(model, model.profile.types[typeIndex], spawnIndex, stress.bossRoute)) do
+                spawn(typeIndex, route)
+                scheduledByRoute[route] += 1
+            end
             spawnIndex += 1
         end
         waveReady = spawnIndex > #entries
         if time >= nextPurchase then
             nextPurchase = time + 1
-            local after: number? = nil
+            local after: any = nil
             local sold = false
             if wave == #model.profile.waves and waveReady and #enemies > 0 and model.sellIdle ~= false then
-                after = math.huge
-                for _, enemy in ipairs(enemies) do if enemy.hp > 0 then after = math.min(after :: number, enemy.distance) end end
-                if after == math.huge then after = nil end
+                after = {}
+                for route in ipairs(model.routes) do after[route] = math.huge end
+                for _, enemy in ipairs(enemies) do if enemy.hp > 0 then after[enemy.route] = math.min(after[enemy.route], enemy.distance) end end
                 for index = #towers, 1, -1 do
                     local tower = towers[index]
                     local stage = tower.def.stages[tower.level + 1]
-                    if tower.def.kind == "economy" or (after and tower.def.kind == "damage" and StrategyModel.coverage(tower.def.sites[tower.site].intervals[tower.level + 1], model.routes, after) <= 0 and after > stage.range) then
+                    if tower.def.kind == "economy" or (after and tower.def.kind == "damage" and stage.unitDps == 0 and StrategyModel.coverage(tower.def.sites[tower.site].intervals[tower.level + 1], model.routes, after) <= 0) then
                         cash += math.floor(stage.invested / 3)
                         if #log < 700 then table.insert(log, {wave = wave, time = time - waveStart, kind = "sell", name = tower.def.name, site = tower.site, level = tower.level, cost = 0}) end
                         table.remove(towers, index)
@@ -1620,7 +1693,7 @@ function StrategyModel.simulate(model: any, policy: any, stress: any, checkpoint
                     end
                 end
             end
-            local action = if sold then nil else StrategyModel.action(model.defs, towers, cash, wave, policy, model.routes, model.cap, after, {spectra = model.spectra, stacking = model.stacking})
+            local action = if sold then nil else StrategyModel.action(model.defs, towers, cash, wave, policy, model.routes, model.cap, after, {spectra = model.spectra, stacking = model.stacking, allPaths = model.allPaths})
             if action then
                 cash -= action.cost
                 if action.kind == "place" then table.insert(towers, {def = action.def, site = action.site, level = 0, nextShot = time, stunnedUntil = 0, slowedUntil = 0, born = time})
@@ -1651,23 +1724,17 @@ function StrategyModel.simulate(model: any, policy: any, stress: any, checkpoint
                         end
                     end
                 end
-                local reduction = 100 / (100 + math.max(0, target.info.defense))
-                local hits = 0
-                for _, enemy in ipairs(enemies) do
-                    if enemy.hp <= 0 then continue end
-                    local splashHit = stage.splash > 0 and enemy.route == target.route and math.abs(enemy.distance - target.distance) <= stage.splash
-                    if enemy ~= target and not splashHit then continue end
-                    local amount = damage * (if splashHit then 100 / (100 + math.max(0, enemy.info.defense)) else reduction)
-                    enemy.hp -= amount
-                    local reward = enemy.info.reward or 0
-                    local quantum = enemy.info.threshold or 0
-                    if quantum > 0 then
-                        local paid = math.clamp(math.floor((1 - math.max(0, enemy.hp) / enemy.max) / quantum + 0.000001) * quantum, 0, 1)
-                        cash += math.max(0, paid - enemy.paid) * reward / model.players
-                        enemy.paid = paid
+                hurt(target, damage)
+                if stage.splash > 0 or (stage.pierce or 1) > 1 then
+                    local targetPosition = position(target)
+                    local hits = 1
+                    local cap = if stage.splash > 0 then 16 else stage.pierce
+                    for _, enemy in ipairs(enemies) do
+                        if enemy == target or enemy.hp <= 0 or (enemy.info.hidden and not stage.hidden) or ((enemy.info.flying or time < enemy.flyingUntil) and not stage.flying) or (enemy.info.lead and not stage.lead) then continue end
+                        local scale = StrategyModel.secondaryHit(stage, site.point, targetPosition, position(enemy))
+                        if scale > 0 then hurt(enemy, damage * scale); hits += 1 end
+                        if hits >= cap then break end
                     end
-                    hits += 1
-                    if hits >= 16 then break end
                 end
             end
         end
@@ -1742,16 +1809,17 @@ function StrategyModel.simulate(model: any, policy: any, stress: any, checkpoint
         if health > 0 and waveReady and #enemies == 0 then
             if lastClear < 0 then lastClear = time end
             cleared = math.max(cleared, wave)
-            if wave == #model.profile.waves then return {won = true, cleared = wave, reached = wave, health = health, cash = cash, killed = killed, leaked = leaked, elapsed = time, bossProgress = bossRemaining, bossActions = bossActions, actions = log} end
+            if wave == #model.profile.waves then return {won = true, cleared = wave, reached = wave, health = health, cash = cash, killed = killed, leaked = leaked, elapsed = time, bossProgress = bossRemaining, bossActions = bossActions, scheduledByRoute = scheduledByRoute, actions = log} end
         end
         if health > 0 and wave < #model.profile.waves and ((lastClear >= 0 and time - lastClear >= 4) or time - waveStart >= 60) then nextWave() end
         time += dt
     end
-    return {won = false, cleared = cleared, reached = wave, health = math.max(0, health), cash = cash, killed = killed, leaked = leaked, elapsed = time, bossProgress = bossRemaining, bossActions = bossActions, actions = log}
+    return {won = false, cleared = cleared, reached = wave, health = math.max(0, health), cash = cash, killed = killed, leaked = leaked, elapsed = time, bossProgress = bossRemaining, bossActions = bossActions, scheduledByRoute = scheduledByRoute, actions = log}
 end
 
-local planner: any = {token = 0, busy = false, running = false, plan = nil, message = "Calculate a strategy before starting.", seconds = 45, autoReady = true, useAbilities = true, sellIdle = true, reports = {}, owned = {}, retry = {}, actions = 0, sim = 0, wave = -1, waveStart = 0, abilityCheck = 0}
+local planner: any = {token = 0, busy = false, running = false, plan = nil, message = "Calculate a strategy before starting.", seconds = 45, autoReady = true, useAbilities = true, sellIdle = true, composition = "Automatic", reports = {}, owned = {}, retry = {}, actions = 0, sim = 0, wave = -1, waveStart = 0, abilityCheck = 0}
 local plannerStatus: any = nil
+local plannerMapStatus: any = nil
 local plannerVoteFolder: any = nil
 local plannerVoteReplicator: any = nil
 local plannerReleaseVote: any = nil
@@ -1771,7 +1839,7 @@ local function plannerVoting(): any
     return plannerVoteReplicator
 end
 local plannerNPC: any = loadModule(ReplicatedStorage.Client.Modules.Replicators.NPCReplicator)
-local plannerProfile: any = game:GetService("HttpService"):JSONDecode([==[{"schema":"ozan-tds-strategy-profile/v1","difficulty":"Intermediate","mode":"Survival","placeVersion":1717,"recording":"20261108T202242Z-0F61AC04","recordedMaps":["Retro Crossroads"],"recordedWins":1,"scheduledEnemies":1065,"types":[{"name":"Normal","health":5.0,"speed":2.7,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":5.0,"threshold":0.0,"boss":false},{"name":"Speedy","health":6.0,"speed":5.5,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":5.0,"threshold":0.0,"boss":false},{"name":"Slow","health":25.0,"speed":2.5,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":10.0,"threshold":0.0,"boss":false},{"name":"Slow","health":50.0,"speed":2.5,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":10.0,"threshold":0.0,"boss":false},{"name":"Normal Boss","health":180.0,"speed":2.35,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":100.0,"threshold":0.0,"boss":false},{"name":"Abnormal","health":10.0,"speed":3.5,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":8.0,"threshold":0.0,"boss":false},{"name":"Quick","health":14.0,"speed":6.5,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":10.0,"threshold":0.0,"boss":false},{"name":"Heavy","health":45.0,"speed":2.8,"defense":25.0,"hidden":false,"flying":false,"lead":false,"reward":25.0,"threshold":0.0,"boss":false},{"name":"Quick","health":14.0,"speed":10.201963135,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":10.0,"threshold":0.0,"boss":false},{"name":"Quick","health":14.0,"speed":13.0,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":10.0,"threshold":0.0,"boss":false},{"name":"Elite Abnormal","health":250.0,"speed":3.5,"defense":30.0,"hidden":false,"flying":false,"lead":false,"reward":200.0,"threshold":0.0,"boss":false},{"name":"Hidden","health":35.0,"speed":4.0,"defense":0.0,"hidden":true,"flying":false,"lead":false,"reward":20.0,"threshold":0.0,"boss":false},{"name":"Heavy","health":90.0,"speed":2.8,"defense":25.0,"hidden":false,"flying":false,"lead":false,"reward":25.0,"threshold":0.0,"boss":false},{"name":"Breaker2","health":40.0,"speed":4.5,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":25,"threshold":0,"boss":false,"children":{"type":15,"count":1}},{"name":"Breaker","health":20.0,"speed":5.35,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":25,"threshold":0,"boss":false},{"name":"Bolt","health":125.0,"speed":9.0,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":35.0,"threshold":0.0,"boss":false},{"name":"Abnormal","health":20.0,"speed":3.5,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":8.0,"threshold":0.0,"boss":false},{"name":"Quick","health":28.0,"speed":6.5,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":10.0,"threshold":0.0,"boss":false},{"name":"Bolt","health":125.0,"speed":18.0,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":35.0,"threshold":0.0,"boss":false},{"name":"Bolt","health":125.0,"speed":14.125795109999999,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":35.0,"threshold":0.0,"boss":false},{"name":"Reaver","health":200.0,"speed":4.0,"defense":125.0,"hidden":false,"flying":false,"lead":false,"reward":200.0,"threshold":0.0,"boss":false},{"name":"Bolt","health":250.0,"speed":9.0,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":35.0,"threshold":0.0,"boss":false},{"name":"Elite Abnormal","health":500.0,"speed":3.5,"defense":30.0,"hidden":false,"flying":false,"lead":false,"reward":200.0,"threshold":0.0,"boss":false},{"name":"Bolt","health":125.0,"speed":9.0,"defense":0.0,"hidden":true,"flying":false,"lead":false,"reward":35.0,"threshold":0.0,"boss":false},{"name":"Reaver","health":200.0,"speed":4.0,"defense":125.0,"hidden":true,"flying":false,"lead":false,"reward":200.0,"threshold":0.0,"boss":false},{"name":"Ghoul","health":1000.0,"speed":2.25,"defense":30.0,"hidden":true,"flying":false,"lead":false,"reward":650.0,"threshold":0.0,"boss":false},{"name":"Boomer","health":850.0,"speed":4.5,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":2000.0,"threshold":0.0,"boss":false},{"name":"Bolt","health":250.0,"speed":18.0,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":35.0,"threshold":0.0,"boss":false},{"name":"Ghoul","health":500.0,"speed":2.25,"defense":30.0,"hidden":true,"flying":false,"lead":false,"reward":650.0,"threshold":0.0,"boss":false},{"name":"Hazmat","health":200.0,"speed":4.5,"defense":60.0,"hidden":false,"flying":false,"lead":false,"reward":350.0,"threshold":0.0,"boss":false},{"name":"Living Experiment","health":2400.0,"speed":2.5,"defense":30.0,"hidden":false,"flying":false,"lead":false,"reward":3400.0,"threshold":0.25,"boss":false},{"name":"Bolt","health":250.0,"speed":14.125795109999999,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":35.0,"threshold":0.0,"boss":false},{"name":"Speedy Boss","health":4400.0,"speed":4.0,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":3000.0,"threshold":0.0,"boss":false},{"name":"Slime","health":350.0,"speed":4.0,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":250.0,"threshold":0.0,"boss":false},{"name":"Reaver","health":400.0,"speed":6.278131159999999,"defense":125.0,"hidden":false,"flying":false,"lead":false,"reward":200.0,"threshold":0.0,"boss":false},{"name":"Reaver","health":400.0,"speed":8.0,"defense":125.0,"hidden":false,"flying":false,"lead":false,"reward":200.0,"threshold":0.0,"boss":false},{"name":"Breaker4","health":170.0,"speed":3.0,"defense":35.0,"hidden":false,"flying":false,"lead":false,"reward":25,"threshold":0,"boss":false,"children":{"type":39,"count":3}},{"name":"Speedy Boss","health":2200.0,"speed":4.0,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":3000.0,"threshold":0.0,"boss":false},{"name":"Breaker3","health":90.0,"speed":4.0,"defense":20.0,"hidden":false,"flying":false,"lead":false,"reward":25,"threshold":0,"boss":false,"children":{"type":14,"count":1}},{"name":"Ghoul","health":1000.0,"speed":4.5,"defense":30.0,"hidden":true,"flying":false,"lead":false,"reward":650.0,"threshold":0.0,"boss":false},{"name":"Ghoul","health":1000.0,"speed":3.5314487774999996,"defense":30.0,"hidden":true,"flying":false,"lead":false,"reward":650.0,"threshold":0.0,"boss":false},{"name":"Bolt","health":250.0,"speed":16.33228183003334,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":35.0,"threshold":0.0,"boss":false},{"name":"Living Experiment","health":4800.0,"speed":2.5,"defense":30.0,"hidden":false,"flying":false,"lead":false,"reward":3400.0,"threshold":0.25,"boss":false},{"name":"Elite Hazmat","health":320.0,"speed":4.0,"defense":60.0,"hidden":false,"flying":false,"lead":false,"reward":450.0,"threshold":0.0,"boss":false},{"name":"Hidden Boss","health":1700.0,"speed":10.0,"defense":0.0,"hidden":true,"flying":false,"lead":false,"reward":850.0,"threshold":0.0,"boss":false},{"name":"Reaver","health":400.0,"speed":4.0,"defense":125.0,"hidden":false,"flying":false,"lead":false,"reward":200.0,"threshold":0.0,"boss":false},{"name":"Speedy Boss","health":2200.0,"speed":8.0,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":3000.0,"threshold":0.0,"boss":false},{"name":"Reaver","health":200.0,"speed":8.0,"defense":125.0,"hidden":false,"flying":false,"lead":false,"reward":200.0,"threshold":0.0,"boss":false},{"name":"Reaver","health":200.0,"speed":6.278131159999999,"defense":125.0,"hidden":false,"flying":false,"lead":false,"reward":200.0,"threshold":0.0,"boss":false},{"name":"Hidden Boss","health":850.0,"speed":5.0,"defense":0.0,"hidden":true,"flying":false,"lead":false,"reward":850.0,"threshold":0.0,"boss":false},{"name":"Failed Experiment","health":9000.0,"speed":4.0,"defense":50.0,"hidden":false,"flying":false,"lead":false,"reward":12000.0,"threshold":0.33,"boss":false},{"name":"Slime","health":700.0,"speed":7.258791924459263,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":250.0,"threshold":0.0,"boss":false},{"name":"Slime","health":700.0,"speed":8.0,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":250.0,"threshold":0.0,"boss":false},{"name":"Elite Hazmat","health":320.0,"speed":6.278131159999999,"defense":60.0,"hidden":false,"flying":false,"lead":false,"reward":450.0,"threshold":0.0,"boss":false},{"name":"Elite Hazmat","health":320.0,"speed":8.0,"defense":60.0,"hidden":false,"flying":false,"lead":false,"reward":450.0,"threshold":0.0,"boss":false},{"name":"Bolt","health":250.0,"speed":14.125795109999999,"defense":0.0,"hidden":true,"flying":false,"lead":false,"reward":35.0,"threshold":0.0,"boss":false},{"name":"Breaker3","health":90.0,"speed":4.0,"defense":10.0,"hidden":false,"flying":false,"lead":false,"reward":25,"threshold":0,"boss":false,"children":{"type":14,"count":1}},{"name":"Speedy Boss","health":4400.0,"speed":6.278131159999999,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":3000.0,"threshold":0.0,"boss":false},{"name":"Giant Boss","health":25000.0,"speed":2.0,"defense":20.0,"hidden":false,"flying":false,"lead":false,"reward":24000.0,"threshold":0.25,"boss":false},{"name":"Ghoul","health":500.0,"speed":4.083070457508335,"defense":30.0,"hidden":true,"flying":false,"lead":false,"reward":650.0,"threshold":0.0,"boss":false},{"name":"Ghoul","health":500.0,"speed":4.5,"defense":30.0,"hidden":true,"flying":false,"lead":false,"reward":650.0,"threshold":0.0,"boss":false},{"name":"Speedy Boss","health":4400.0,"speed":8.0,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":3000.0,"threshold":0.0,"boss":false},{"name":"Normal","health":10.0,"speed":2.7,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":5.0,"threshold":0.0,"boss":false},{"name":"Speedy","health":12.0,"speed":5.5,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":5.0,"threshold":0.0,"boss":false},{"name":"Normal Boss","health":360.0,"speed":4.7,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":100.0,"threshold":0.0,"boss":false},{"name":"Patient Zero","health":100000.0,"speed":1.0,"defense":20.0,"hidden":false,"flying":false,"lead":false,"reward":160000.0,"threshold":0.025,"boss":true},{"name":"Ghoul","health":500.0,"speed":2.25,"defense":18.0,"hidden":true,"flying":false,"lead":false,"reward":650.0,"threshold":0.0,"boss":false}],"waves":[[[0.031,1],[0.032,1],[0.397,1],[1.23,1]],[[0.065,1],[0.969,1],[1.781,1],[2.615,1],[3.431,1],[4.276,1],[5.099,1]],[[0.041,1],[0.999,1],[2.053,1],[3.082,1],[4.1,1],[5.115,1],[5.967,2],[6.8,2],[7.633,2]],[[0.053,1],[1.6,1],[1.715,1],[2.515,1],[3.249,2],[3.883,2],[4.531,2],[5.15,2],[5.781,2],[6.248,3],[7.077,3],[7.904,3],[8.732,3]],[[0.048,3],[0.748,3],[1.498,3],[2.23,3],[2.984,3],[3.697,3],[4.197,2],[5.148,2],[6.08,2],[6.996,2],[7.93,2],[8.847,2],[9.764,1],[10.332,1],[11.147,1],[11.83,1],[12.58,1],[13.315,1]],[[0.038,1],[0.915,1],[1.707,1],[2.679,1],[3.367,1],[4.198,1],[5.032,1],[5.881,1],[6.465,4],[7.064,4],[7.682,4],[8.232,5]],[[0.038,1],[0.649,1],[1.234,2],[1.833,2],[2.43,3],[3.016,3],[3.631,6],[4.265,6],[4.866,6],[5.498,6],[5.985,7],[6.615,7],[7.515,7],[8.998,7],[9.665,8],[10.566,8],[11.0,8],[11.367,8]],[[0.037,6],[0.666,6],[1.315,6],[1.932,6],[2.434,8],[3.283,8],[4.204,8],[4.968,8],[5.883,8],[6.966,8],[7.632,8],[8.249,8],[8.848,9],[9.481,10],[10.116,10],[10.766,10],[11.369,9],[12.017,10]],[[0.075,6],[0.616,6],[1.233,6],[1.716,6],[2.615,6],[3.449,6],[4.116,6],[4.572,6],[6.742,8],[6.743,8],[7.082,8],[7.467,8],[8.065,11]],[[0.001,8],[0.866,8],[1.709,8],[2.532,8],[3.366,8],[4.183,8],[4.867,10],[5.483,10],[6.15,9],[6.815,10],[7.399,10],[8.047,10],[8.666,9],[9.287,10],[9.632,12],[10.282,12],[10.91,12],[11.54,12],[12.197,12],[12.783,12],[13.418,12],[14.081,12],[14.699,12],[15.366,12]],[[0.002,13],[0.046,13],[0.048,13],[0.108,13],[0.671,9],[1.104,9],[1.67,9],[2.187,8],[3.005,8],[3.821,8],[4.454,8],[5.19,7],[5.773,7],[6.388,7],[6.837,12],[7.694,12],[8.387,12],[8.755,12],[9.505,12],[10.244,12],[10.954,12],[11.724,12],[12.154,11],[12.921,11]],[[0.049,14],[0.783,14],[1.484,14],[2.216,14],[2.951,14],[3.682,14],[4.216,12],[4.989,12],[5.666,12],[6.432,12],[7.133,12],[7.72,8],[8.466,8],[9.286,8],[9.816,12],[10.667,12],[11.543,12],[12.185,12],[12.95,12],[13.549,12],[14.216,12],[14.932,11],[17.3,11]],[[0.001,16],[0.648,16],[1.333,16],[1.947,16],[2.617,16],[3.264,16],[3.83,16],[4.464,16],[4.848,14],[5.635,14],[6.5,14],[7.283,14],[8.114,14],[8.782,11],[9.499,11],[10.265,11],[10.9,13],[11.63,13],[12.368,13],[13.179,13],[13.846,13],[14.555,13],[15.097,14],[15.931,14],[16.754,14],[17.63,14],[18.432,14]],[[0.085,16],[0.648,16],[1.294,16],[1.916,16],[2.549,16],[3.2,16],[3.582,12],[4.43,12],[5.282,12],[6.07,12],[6.914,12],[7.764,12],[8.597,12],[9.403,12],[10.264,12],[11.08,12],[11.632,17],[12.265,17],[12.897,17],[13.53,17],[14.164,17],[14.597,18],[15.397,18],[15.847,18],[16.497,18],[17.131,18],[17.614,14],[18.246,14],[18.915,14],[19.531,14],[20.146,14],[20.796,14],[21.432,14],[22.047,14],[22.43,19],[23.063,19],[23.68,19],[24.33,20]],[[0.049,12],[0.889,12],[2.215,12],[3.066,12],[3.65,12],[4.133,21],[5.639,21],[6.882,21],[7.877,12],[8.584,12],[8.913,12],[9.634,12],[10.474,12],[10.953,21],[12.524,21],[13.52,21],[14.658,14],[15.408,14],[15.573,14],[16.178,14],[16.782,14],[17.259,22],[18.194,22],[20.123,22],[21.243,22],[21.354,11],[21.643,11],[22.774,23]],[[0.115,12],[0.899,12],[1.767,12],[2.661,12],[3.391,12],[5.839,12],[6.266,24],[6.385,24],[6.569,16],[6.998,16],[7.522,25],[8.084,21],[8.732,14],[9.122,14],[9.815,14],[10.444,14],[10.969,14],[11.448,11],[12.566,11],[13.633,26]],[[0.058,13],[0.766,13],[1.499,13],[2.232,13],[2.967,13],[3.683,13],[4.236,11],[5.082,11],[5.851,23],[6.615,21],[7.365,21],[8.117,21],[8.722,16],[9.418,16],[9.983,16],[10.549,27],[11.518,19],[12.202,28],[13.035,29],[13.632,29],[14.601,29],[15.566,14],[16.116,14],[17.121,14],[17.749,14],[18.321,14],[19.016,14],[19.565,14],[19.966,14],[20.282,16],[21.165,16],[22.883,16],[23.009,16]],[[0.069,30],[0.69,30],[1.348,30],[1.947,30],[2.548,30],[3.213,30],[3.597,21],[4.406,21],[5.214,21],[6.1,21],[6.801,16],[7.344,16],[7.849,16],[8.399,16],[8.93,16],[9.44,16],[9.991,16],[10.527,16],[10.832,29],[11.648,29],[12.402,29],[13.127,29],[14.024,21],[14.866,21],[15.568,21],[16.509,21],[17.363,30],[18.431,30],[18.764,30],[19.1,30],[19.618,30],[19.991,30],[20.255,31],[20.995,14],[21.596,14],[22.254,14],[23.146,14]],[[0.145,21],[0.866,21],[1.716,21],[2.501,21],[3.2,29],[4.24,29],[5.239,30],[5.868,30],[6.485,30],[7.122,30],[7.802,30],[8.382,30],[9.033,30],[9.641,30],[10.034,14],[10.72,14],[11.333,14],[11.94,14],[12.4,16],[12.995,16],[13.552,16],[14.001,16],[14.536,28],[14.988,28],[15.517,28],[16.136,28],[16.49,30],[17.151,30],[17.528,30],[18.206,30],[18.696,30],[19.123,30],[19.433,29],[20.506,29],[21.467,29],[22.384,21],[23.248,21],[24.075,21],[24.92,21],[25.651,30],[26.181,30],[26.702,30],[27.184,30],[27.718,30],[28.314,30]],[[0.002,16],[0.462,16],[0.909,16],[1.36,16],[1.782,16],[2.177,16],[2.642,16],[3.043,16],[3.214,22],[3.61,22],[4.051,22],[4.532,22],[4.909,22],[5.411,22],[5.771,22],[6.183,22],[6.379,28],[6.888,32],[7.254,32],[7.722,28],[8.085,28],[8.786,28],[8.971,32],[9.425,28],[9.671,33]],[[0.077,30],[0.633,30],[1.306,30],[1.923,30],[2.541,30],[3.273,30],[3.839,34],[4.294,34],[4.95,34],[5.467,34],[5.898,34],[6.455,34],[7.027,34],[7.485,14],[7.965,14],[8.563,14],[9.072,14],[9.558,14],[10.011,21],[10.6,21],[11.218,21],[11.798,14],[12.426,14],[13.038,14],[13.675,14],[14.344,14],[14.762,34],[15.324,34],[15.923,34],[16.489,34],[17.052,34],[17.608,34],[18.148,34],[18.65,35],[19.279,36],[19.876,36],[20.57,11],[21.127,11],[21.77,11],[22.345,31],[23.077,31],[23.664,29],[24.614,29],[24.915,29],[25.536,29],[26.009,34],[26.572,34],[27.123,34],[27.769,34]],[[0.065,28],[0.587,28],[1.144,28],[1.523,27],[2.512,34],[3.314,34],[3.981,34],[4.699,34],[5.548,34],[6.015,31],[6.943,37],[7.791,37],[8.888,37],[9.358,38],[10.373,30],[10.862,30],[11.359,30],[11.955,30],[12.606,30],[13.044,30],[13.678,30],[13.887,40],[14.437,40],[15.08,41],[15.863,32],[16.272,32],[16.886,32],[17.278,28],[17.808,42],[18.059,43],[18.196,28],[19.156,30],[19.442,30],[20.149,30],[20.874,30],[21.235,30]],[[0.056,31],[0.83,14],[1.367,14],[1.938,14],[2.494,14],[3.081,14],[3.564,34],[4.185,34],[4.63,34],[5.177,34],[5.574,30],[6.124,30],[6.619,30],[7.307,30],[7.739,30],[8.285,30],[8.822,34],[9.118,34],[9.679,34],[10.265,34],[10.571,44],[11.22,44],[11.664,44],[12.192,44],[12.744,44],[13.247,44],[13.796,44],[14.306,44],[14.615,29],[15.218,29],[15.884,29],[16.449,29],[17.033,37],[17.702,37],[18.372,44],[19.193,44],[19.764,44],[20.148,44],[20.581,44],[21.231,27],[21.878,28],[22.547,32],[22.786,28],[23.748,42],[23.897,32],[23.971,45],[25.098,34],[25.535,34],[26.006,34],[26.582,34],[27.063,34],[27.602,34],[28.171,34],[28.394,44],[29.04,44],[29.46,44],[29.984,44],[30.633,44]],[[0.049,44],[0.583,44],[1.115,44],[1.597,44],[2.165,44],[2.681,44],[3.017,37],[3.564,37],[4.133,37],[4.516,46],[5.052,46],[5.605,46],[6.13,46],[6.501,34],[7.03,34],[7.564,34],[8.121,34],[8.628,34],[9.205,34],[9.652,38],[10.31,16],[10.776,16],[11.398,16],[11.881,16],[12.11,16],[12.547,16],[12.727,26],[13.264,26],[13.766,26],[14.284,26],[14.705,34],[15.329,34],[15.745,34],[16.284,34],[16.928,34],[17.498,34],[17.888,27],[18.546,44],[19.088,44],[19.872,44],[20.307,44],[20.948,44],[21.737,44],[22.006,47],[22.886,28],[23.232,28],[23.697,32],[24.14,28],[24.54,28],[24.968,28],[25.269,44],[25.836,44],[26.516,44],[27.12,44],[27.726,44],[28.363,44],[28.836,37],[29.369,37],[29.914,37],[30.344,34],[30.883,34],[31.442,34],[31.957,34],[32.476,34],[33.008,34],[33.358,29],[33.861,29],[34.369,29],[35.088,29],[35.315,27],[36.033,48],[36.669,48],[37.133,49],[37.558,31],[38.512,31],[39.345,43]],[[0.062,34],[0.57,34],[1.105,34],[1.621,34],[2.185,34],[2.696,34],[3.036,29],[3.741,29],[4.376,50],[4.986,50],[5.769,50],[6.279,44],[6.938,44],[7.375,44],[7.919,44],[8.429,44],[8.952,44],[9.399,37],[10.129,37],[10.863,37],[11.6,37],[12.177,34],[12.712,34],[13.383,34],[14.002,34],[14.621,34],[15.141,21],[15.868,21],[16.571,21],[17.228,29],[17.827,29],[18.556,29],[19.056,34],[19.773,34],[20.302,34],[20.89,51],[21.8,16],[22.337,16],[22.911,16],[23.423,16]],[[0.001,31],[1.218,31],[2.488,31],[3.547,37],[4.093,37],[4.632,37],[5.067,29],[5.572,29],[6.148,29],[6.667,29],[7.405,52],[7.88,53],[8.392,53],[8.967,52],[9.389,53],[9.91,53],[10.075,27],[10.637,30],[11.25,30],[11.719,30],[12.237,30],[12.922,30],[13.351,30],[13.726,54],[14.212,55],[14.745,55],[15.296,54],[15.79,55],[16.363,54],[16.847,21],[17.389,21],[18.022,21],[18.922,21],[19.431,21],[19.82,34],[20.267,34],[20.81,34],[21.33,34],[21.851,34],[22.39,34],[22.665,26],[23.157,26],[23.833,26],[24.261,26],[24.641,31],[25.88,31],[27.101,31],[28.246,38],[28.957,28],[29.39,28],[30.025,42],[30.375,32],[30.839,28],[31.233,28]],[[0.058,43],[0.775,43],[1.463,21],[2.018,21],[2.651,21],[3.23,44],[3.841,44],[4.29,44],[4.84,44],[5.353,44],[5.903,44],[6.703,44],[7.495,44],[7.865,44],[7.896,21],[8.326,25],[9.233,25],[9.942,25],[10.551,25],[10.765,37],[11.386,37],[11.892,37],[12.43,37],[12.931,37],[13.232,31],[13.956,34],[14.502,34],[14.983,34],[15.498,34],[16.05,34],[16.561,34],[16.918,28],[17.323,28],[17.724,28],[18.173,28],[18.653,56],[18.996,56],[19.441,28],[19.882,28],[20.256,28],[20.685,28],[20.962,29],[21.448,29],[22.01,29],[22.589,29],[22.943,40],[23.496,40],[24.072,41],[24.551,40],[24.958,44],[25.481,44],[26.012,44],[26.536,44],[27.055,44],[27.719,44],[28.165,44],[28.61,34],[29.446,34],[30.049,34],[30.473,34],[31.071,34],[31.6,51],[31.629,34],[32.14,21],[32.771,21],[33.419,21],[33.984,37],[34.474,37],[35.012,37],[35.467,31],[36.155,44],[36.742,44],[37.522,44],[38.057,44],[38.511,44],[39.043,44],[39.17,32],[39.781,32],[40.137,28],[40.562,32],[40.946,28],[41.476,42],[41.57,58],[42.228,37],[43.011,37],[43.518,37],[44.008,37],[44.22,44],[44.848,44],[45.345,44],[45.873,44],[46.391,44],[46.897,34],[47.303,34],[47.895,34],[48.556,34],[48.914,34],[49.352,40],[49.743,40],[50.322,40],[50.979,41]],[[0.085,28],[0.455,28],[0.902,28],[1.347,32],[1.74,28],[2.207,28],[2.613,28],[3.059,32],[3.585,28],[3.894,28],[4.047,44],[4.618,44],[5.17,44],[5.745,44],[6.29,44],[6.878,44],[7.327,27],[8.022,31],[8.944,40],[9.44,40],[9.97,40],[10.596,44],[11.092,44],[11.618,44],[12.188,44],[12.757,44],[13.549,44],[13.714,34],[14.341,34],[14.822,34],[15.362,34],[15.896,34],[16.436,34],[16.699,28],[17.14,28],[17.542,28],[18.0,56],[18.411,28],[18.767,46],[19.399,46],[19.981,46],[20.639,46],[21.264,46],[21.712,27],[22.438,37],[23.071,37],[23.686,37],[24.227,34],[24.777,34],[25.429,34],[25.832,34],[26.324,34],[26.873,34],[27.225,38],[28.131,35],[28.788,36],[29.506,59]],[[0.002,44],[0.538,44],[1.013,44],[1.593,44],[2.112,44],[2.662,44],[2.962,27],[3.597,28],[3.959,28],[4.428,32],[4.857,28],[5.305,28],[5.714,28],[6.167,32],[6.597,28],[6.97,60],[7.445,61],[7.981,61],[8.507,61],[8.785,38],[9.623,38],[10.381,37],[10.906,37],[11.442,37],[11.851,34],[12.37,34],[13.001,34],[13.491,34],[14.043,34],[14.653,34],[15.097,34],[15.392,44],[15.933,44],[16.555,44],[17.014,44],[17.551,44],[18.157,44],[18.578,44],[19.13,44],[19.421,31],[20.191,31],[20.976,29],[21.601,29],[21.996,29],[22.486,27],[23.096,46],[23.607,46],[24.153,46],[24.69,46],[25.216,46],[25.603,34],[26.116,34],[26.769,34],[27.178,34],[27.7,34],[28.243,34],[28.723,34],[29.234,34],[29.52,44],[30.078,44],[30.702,44],[31.088,44],[31.669,44],[32.187,44],[32.689,44],[33.225,44],[33.588,26],[34.098,26],[34.675,26],[35.173,26],[35.577,43],[36.38,51],[37.371,62],[38.388,28],[38.83,56],[39.236,28],[39.706,28],[40.131,28],[40.559,56]],[[0.002,63],[0.448,63],[0.896,63],[1.314,63],[1.747,63],[1.98,64],[2.414,64],[2.881,64],[3.28,64],[3.732,64],[3.971,4],[4.424,4],[4.868,4],[5.28,4],[5.704,4],[6.023,17],[6.471,17],[6.872,17],[7.316,17],[7.747,17],[8.023,18],[8.468,18],[8.863,18],[9.313,18],[9.841,18],[10.166,13],[10.69,13],[11.198,13],[11.38,13],[11.748,13],[12.018,34],[12.462,34],[12.944,34],[13.402,34],[13.886,34],[14.255,27],[14.95,65],[15.44,65],[15.976,65],[16.461,23],[17.0,23],[17.534,23],[17.93,37],[18.579,37],[19.162,27],[19.747,34],[20.198,34],[20.676,34],[21.131,34],[21.612,34],[22.007,46],[22.646,46],[23.261,46],[23.843,41],[24.409,40],[25.103,40],[25.631,16],[26.069,16],[26.475,16],[26.913,16],[27.345,16],[27.859,16],[27.994,31],[28.76,31],[29.531,66],[30.521,59],[33.506,27],[34.007,55],[34.54,55],[35.087,55],[35.524,20],[36.173,20],[36.535,19],[36.779,34],[37.181,34],[37.632,34],[38.132,34],[38.666,34],[38.961,31]]],"bossPool":[27,29,31,38,67],"boss":{"summon":{"first":13.235,"interval":29.957,"count":5,"pause":2.5},"stomp":{"first":27.834,"interval":55,"radius":30,"stun":5,"pause":3,"flying":3},"flask":{"first":7.534,"interval":28.177,"ahead":12,"radius":9,"duration":30,"healingPerSecond":100,"pause":3},"toxic":{"first":19.736,"interval":30.613,"radius":28,"splash":5,"duration":10,"cooldownMultiplier":2.5,"targets":4,"pause":5},"rage":{"healthFraction":0.5,"speedMultiplier":1.6,"pause":4,"healingPerSecond":750,"healingDuration":4},"assumptions":["Attack first delays and repeated intervals are observed in simulation seconds in this recording.","Flask puddles are approximated by one path zone; projectile spread and overlap vary.","Rage healing duration is approximated by the observed client animation duration.","Toxic target selection and movement pauses are approximated."]},"waveEconomy":{"base":200,"increment":150,"clearSolo":0.35,"clearTeam":0.2},"uncertainties":["One recorded win does not measure a win rate.","Enemy modifiers, spawn jitter and boss decisions can differ.","Simulation uses approximate projectile, shotgun and splash damage and conservative tower effectiveness.","Spawner units, DOT, charged attacks, complex buffs and ability damage are not fully simulated.","Ghoul variants are conservatively treated as hidden.","Co-op simulation assumes no allied damage and splits kill cash; it cannot plan other players actions.","The native placement server remains authoritative."],"references":["https://tds.wiki/w/Intermediate_Mode","https://tds.wiki/w/Patient_Zero","https://tds.wiki/w/Defense"]}]==])
+local plannerProfile: any = game:GetService("HttpService"):JSONDecode([==[{"schema":"ozan-tds-strategy-profile/v1","difficulty":"Intermediate","mode":"Survival","placeVersion":1717,"recording":"20261108T202242Z-0F61AC04","recordedMaps":["Retro Crossroads"],"recordedWins":1,"scheduledEnemies":1065,"types":[{"name":"Normal","health":5.0,"speed":2.7,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":5.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Speedy","health":6.0,"speed":5.5,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":5.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Slow","health":25.0,"speed":2.5,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":10.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Slow","health":50.0,"speed":2.5,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":10.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Normal Boss","health":180.0,"speed":2.35,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":100.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Abnormal","health":10.0,"speed":3.5,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":8.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Quick","health":14.0,"speed":6.5,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":10.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Heavy","health":45.0,"speed":2.8,"defense":25.0,"hidden":false,"flying":false,"lead":false,"reward":25.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Quick","health":14.0,"speed":10.201963135,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":10.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Quick","health":14.0,"speed":13.0,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":10.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Elite Abnormal","health":250.0,"speed":3.5,"defense":30.0,"hidden":false,"flying":false,"lead":false,"reward":200.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Hidden","health":35.0,"speed":4.0,"defense":0.0,"hidden":true,"flying":false,"lead":false,"reward":20.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Heavy","health":90.0,"speed":2.8,"defense":25.0,"hidden":false,"flying":false,"lead":false,"reward":25.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Breaker2","health":40.0,"speed":4.5,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":25,"threshold":0,"boss":false,"spawnOnce":false,"children":{"type":15,"count":1}},{"name":"Breaker","health":20.0,"speed":5.35,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":25,"threshold":0,"boss":false,"spawnOnce":false},{"name":"Bolt","health":125.0,"speed":9.0,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":35.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Abnormal","health":20.0,"speed":3.5,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":8.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Quick","health":28.0,"speed":6.5,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":10.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Bolt","health":125.0,"speed":18.0,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":35.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Bolt","health":125.0,"speed":14.125795109999999,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":35.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Reaver","health":200.0,"speed":4.0,"defense":125.0,"hidden":false,"flying":false,"lead":false,"reward":200.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Bolt","health":250.0,"speed":9.0,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":35.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Elite Abnormal","health":500.0,"speed":3.5,"defense":30.0,"hidden":false,"flying":false,"lead":false,"reward":200.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Bolt","health":125.0,"speed":9.0,"defense":0.0,"hidden":true,"flying":false,"lead":false,"reward":35.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Reaver","health":200.0,"speed":4.0,"defense":125.0,"hidden":true,"flying":false,"lead":false,"reward":200.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Ghoul","health":1000.0,"speed":2.25,"defense":30.0,"hidden":true,"flying":false,"lead":false,"reward":650.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Boomer","health":850.0,"speed":4.5,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":2000.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Bolt","health":250.0,"speed":18.0,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":35.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Ghoul","health":500.0,"speed":2.25,"defense":30.0,"hidden":true,"flying":false,"lead":false,"reward":650.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Hazmat","health":200.0,"speed":4.5,"defense":60.0,"hidden":false,"flying":false,"lead":false,"reward":350.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Living Experiment","health":2400.0,"speed":2.5,"defense":30.0,"hidden":false,"flying":false,"lead":false,"reward":3400.0,"threshold":0.25,"boss":false,"spawnOnce":false},{"name":"Bolt","health":250.0,"speed":14.125795109999999,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":35.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Speedy Boss","health":4400.0,"speed":4.0,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":3000.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Slime","health":350.0,"speed":4.0,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":250.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Reaver","health":400.0,"speed":6.278131159999999,"defense":125.0,"hidden":false,"flying":false,"lead":false,"reward":200.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Reaver","health":400.0,"speed":8.0,"defense":125.0,"hidden":false,"flying":false,"lead":false,"reward":200.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Breaker4","health":170.0,"speed":3.0,"defense":35.0,"hidden":false,"flying":false,"lead":false,"reward":25,"threshold":0,"boss":false,"spawnOnce":false,"children":{"type":39,"count":3}},{"name":"Speedy Boss","health":2200.0,"speed":4.0,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":3000.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Breaker3","health":90.0,"speed":4.0,"defense":20.0,"hidden":false,"flying":false,"lead":false,"reward":25,"threshold":0,"boss":false,"spawnOnce":false,"children":{"type":14,"count":1}},{"name":"Ghoul","health":1000.0,"speed":4.5,"defense":30.0,"hidden":true,"flying":false,"lead":false,"reward":650.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Ghoul","health":1000.0,"speed":3.5314487774999996,"defense":30.0,"hidden":true,"flying":false,"lead":false,"reward":650.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Bolt","health":250.0,"speed":16.33228183003334,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":35.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Living Experiment","health":4800.0,"speed":2.5,"defense":30.0,"hidden":false,"flying":false,"lead":false,"reward":3400.0,"threshold":0.25,"boss":false,"spawnOnce":false},{"name":"Elite Hazmat","health":320.0,"speed":4.0,"defense":60.0,"hidden":false,"flying":false,"lead":false,"reward":450.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Hidden Boss","health":1700.0,"speed":10.0,"defense":0.0,"hidden":true,"flying":false,"lead":false,"reward":850.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Reaver","health":400.0,"speed":4.0,"defense":125.0,"hidden":false,"flying":false,"lead":false,"reward":200.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Speedy Boss","health":2200.0,"speed":8.0,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":3000.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Reaver","health":200.0,"speed":8.0,"defense":125.0,"hidden":false,"flying":false,"lead":false,"reward":200.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Reaver","health":200.0,"speed":6.278131159999999,"defense":125.0,"hidden":false,"flying":false,"lead":false,"reward":200.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Hidden Boss","health":850.0,"speed":5.0,"defense":0.0,"hidden":true,"flying":false,"lead":false,"reward":850.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Failed Experiment","health":9000.0,"speed":4.0,"defense":50.0,"hidden":false,"flying":false,"lead":false,"reward":12000.0,"threshold":0.33,"boss":false,"spawnOnce":false},{"name":"Slime","health":700.0,"speed":7.258791924459263,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":250.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Slime","health":700.0,"speed":8.0,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":250.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Elite Hazmat","health":320.0,"speed":6.278131159999999,"defense":60.0,"hidden":false,"flying":false,"lead":false,"reward":450.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Elite Hazmat","health":320.0,"speed":8.0,"defense":60.0,"hidden":false,"flying":false,"lead":false,"reward":450.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Bolt","health":250.0,"speed":14.125795109999999,"defense":0.0,"hidden":true,"flying":false,"lead":false,"reward":35.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Breaker3","health":90.0,"speed":4.0,"defense":10.0,"hidden":false,"flying":false,"lead":false,"reward":25,"threshold":0,"boss":false,"spawnOnce":false,"children":{"type":14,"count":1}},{"name":"Speedy Boss","health":4400.0,"speed":6.278131159999999,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":3000.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Giant Boss","health":25000.0,"speed":2.0,"defense":20.0,"hidden":false,"flying":false,"lead":false,"reward":24000.0,"threshold":0.25,"boss":false,"spawnOnce":false},{"name":"Ghoul","health":500.0,"speed":4.083070457508335,"defense":30.0,"hidden":true,"flying":false,"lead":false,"reward":650.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Ghoul","health":500.0,"speed":4.5,"defense":30.0,"hidden":true,"flying":false,"lead":false,"reward":650.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Speedy Boss","health":4400.0,"speed":8.0,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":3000.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Normal","health":10.0,"speed":2.7,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":5.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Speedy","health":12.0,"speed":5.5,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":5.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Normal Boss","health":360.0,"speed":4.7,"defense":0.0,"hidden":false,"flying":false,"lead":false,"reward":100.0,"threshold":0.0,"boss":false,"spawnOnce":false},{"name":"Patient Zero","health":100000.0,"speed":1.0,"defense":20.0,"hidden":false,"flying":false,"lead":false,"reward":160000.0,"threshold":0.025,"boss":true,"spawnOnce":true},{"name":"Ghoul","health":500.0,"speed":2.25,"defense":18.0,"hidden":true,"flying":false,"lead":false,"reward":650.0,"threshold":0.0,"boss":false,"spawnOnce":false}],"waves":[[[0.031,1],[0.032,1],[0.397,1],[1.23,1]],[[0.065,1],[0.969,1],[1.781,1],[2.615,1],[3.431,1],[4.276,1],[5.099,1]],[[0.041,1],[0.999,1],[2.053,1],[3.082,1],[4.1,1],[5.115,1],[5.967,2],[6.8,2],[7.633,2]],[[0.053,1],[1.6,1],[1.715,1],[2.515,1],[3.249,2],[3.883,2],[4.531,2],[5.15,2],[5.781,2],[6.248,3],[7.077,3],[7.904,3],[8.732,3]],[[0.048,3],[0.748,3],[1.498,3],[2.23,3],[2.984,3],[3.697,3],[4.197,2],[5.148,2],[6.08,2],[6.996,2],[7.93,2],[8.847,2],[9.764,1],[10.332,1],[11.147,1],[11.83,1],[12.58,1],[13.315,1]],[[0.038,1],[0.915,1],[1.707,1],[2.679,1],[3.367,1],[4.198,1],[5.032,1],[5.881,1],[6.465,4],[7.064,4],[7.682,4],[8.232,5]],[[0.038,1],[0.649,1],[1.234,2],[1.833,2],[2.43,3],[3.016,3],[3.631,6],[4.265,6],[4.866,6],[5.498,6],[5.985,7],[6.615,7],[7.515,7],[8.998,7],[9.665,8],[10.566,8],[11.0,8],[11.367,8]],[[0.037,6],[0.666,6],[1.315,6],[1.932,6],[2.434,8],[3.283,8],[4.204,8],[4.968,8],[5.883,8],[6.966,8],[7.632,8],[8.249,8],[8.848,9],[9.481,10],[10.116,10],[10.766,10],[11.369,9],[12.017,10]],[[0.075,6],[0.616,6],[1.233,6],[1.716,6],[2.615,6],[3.449,6],[4.116,6],[4.572,6],[6.742,8],[6.743,8],[7.082,8],[7.467,8],[8.065,11]],[[0.001,8],[0.866,8],[1.709,8],[2.532,8],[3.366,8],[4.183,8],[4.867,10],[5.483,10],[6.15,9],[6.815,10],[7.399,10],[8.047,10],[8.666,9],[9.287,10],[9.632,12],[10.282,12],[10.91,12],[11.54,12],[12.197,12],[12.783,12],[13.418,12],[14.081,12],[14.699,12],[15.366,12]],[[0.002,13],[0.046,13],[0.048,13],[0.108,13],[0.671,9],[1.104,9],[1.67,9],[2.187,8],[3.005,8],[3.821,8],[4.454,8],[5.19,7],[5.773,7],[6.388,7],[6.837,12],[7.694,12],[8.387,12],[8.755,12],[9.505,12],[10.244,12],[10.954,12],[11.724,12],[12.154,11],[12.921,11]],[[0.049,14],[0.783,14],[1.484,14],[2.216,14],[2.951,14],[3.682,14],[4.216,12],[4.989,12],[5.666,12],[6.432,12],[7.133,12],[7.72,8],[8.466,8],[9.286,8],[9.816,12],[10.667,12],[11.543,12],[12.185,12],[12.95,12],[13.549,12],[14.216,12],[14.932,11],[17.3,11]],[[0.001,16],[0.648,16],[1.333,16],[1.947,16],[2.617,16],[3.264,16],[3.83,16],[4.464,16],[4.848,14],[5.635,14],[6.5,14],[7.283,14],[8.114,14],[8.782,11],[9.499,11],[10.265,11],[10.9,13],[11.63,13],[12.368,13],[13.179,13],[13.846,13],[14.555,13],[15.097,14],[15.931,14],[16.754,14],[17.63,14],[18.432,14]],[[0.085,16],[0.648,16],[1.294,16],[1.916,16],[2.549,16],[3.2,16],[3.582,12],[4.43,12],[5.282,12],[6.07,12],[6.914,12],[7.764,12],[8.597,12],[9.403,12],[10.264,12],[11.08,12],[11.632,17],[12.265,17],[12.897,17],[13.53,17],[14.164,17],[14.597,18],[15.397,18],[15.847,18],[16.497,18],[17.131,18],[17.614,14],[18.246,14],[18.915,14],[19.531,14],[20.146,14],[20.796,14],[21.432,14],[22.047,14],[22.43,19],[23.063,19],[23.68,19],[24.33,20]],[[0.049,12],[0.889,12],[2.215,12],[3.066,12],[3.65,12],[4.133,21],[5.639,21],[6.882,21],[7.877,12],[8.584,12],[8.913,12],[9.634,12],[10.474,12],[10.953,21],[12.524,21],[13.52,21],[14.658,14],[15.408,14],[15.573,14],[16.178,14],[16.782,14],[17.259,22],[18.194,22],[20.123,22],[21.243,22],[21.354,11],[21.643,11],[22.774,23]],[[0.115,12],[0.899,12],[1.767,12],[2.661,12],[3.391,12],[5.839,12],[6.266,24],[6.385,24],[6.569,16],[6.998,16],[7.522,25],[8.084,21],[8.732,14],[9.122,14],[9.815,14],[10.444,14],[10.969,14],[11.448,11],[12.566,11],[13.633,26]],[[0.058,13],[0.766,13],[1.499,13],[2.232,13],[2.967,13],[3.683,13],[4.236,11],[5.082,11],[5.851,23],[6.615,21],[7.365,21],[8.117,21],[8.722,16],[9.418,16],[9.983,16],[10.549,27],[11.518,19],[12.202,28],[13.035,29],[13.632,29],[14.601,29],[15.566,14],[16.116,14],[17.121,14],[17.749,14],[18.321,14],[19.016,14],[19.565,14],[19.966,14],[20.282,16],[21.165,16],[22.883,16],[23.009,16]],[[0.069,30],[0.69,30],[1.348,30],[1.947,30],[2.548,30],[3.213,30],[3.597,21],[4.406,21],[5.214,21],[6.1,21],[6.801,16],[7.344,16],[7.849,16],[8.399,16],[8.93,16],[9.44,16],[9.991,16],[10.527,16],[10.832,29],[11.648,29],[12.402,29],[13.127,29],[14.024,21],[14.866,21],[15.568,21],[16.509,21],[17.363,30],[18.431,30],[18.764,30],[19.1,30],[19.618,30],[19.991,30],[20.255,31],[20.995,14],[21.596,14],[22.254,14],[23.146,14]],[[0.145,21],[0.866,21],[1.716,21],[2.501,21],[3.2,29],[4.24,29],[5.239,30],[5.868,30],[6.485,30],[7.122,30],[7.802,30],[8.382,30],[9.033,30],[9.641,30],[10.034,14],[10.72,14],[11.333,14],[11.94,14],[12.4,16],[12.995,16],[13.552,16],[14.001,16],[14.536,28],[14.988,28],[15.517,28],[16.136,28],[16.49,30],[17.151,30],[17.528,30],[18.206,30],[18.696,30],[19.123,30],[19.433,29],[20.506,29],[21.467,29],[22.384,21],[23.248,21],[24.075,21],[24.92,21],[25.651,30],[26.181,30],[26.702,30],[27.184,30],[27.718,30],[28.314,30]],[[0.002,16],[0.462,16],[0.909,16],[1.36,16],[1.782,16],[2.177,16],[2.642,16],[3.043,16],[3.214,22],[3.61,22],[4.051,22],[4.532,22],[4.909,22],[5.411,22],[5.771,22],[6.183,22],[6.379,28],[6.888,32],[7.254,32],[7.722,28],[8.085,28],[8.786,28],[8.971,32],[9.425,28],[9.671,33]],[[0.077,30],[0.633,30],[1.306,30],[1.923,30],[2.541,30],[3.273,30],[3.839,34],[4.294,34],[4.95,34],[5.467,34],[5.898,34],[6.455,34],[7.027,34],[7.485,14],[7.965,14],[8.563,14],[9.072,14],[9.558,14],[10.011,21],[10.6,21],[11.218,21],[11.798,14],[12.426,14],[13.038,14],[13.675,14],[14.344,14],[14.762,34],[15.324,34],[15.923,34],[16.489,34],[17.052,34],[17.608,34],[18.148,34],[18.65,35],[19.279,36],[19.876,36],[20.57,11],[21.127,11],[21.77,11],[22.345,31],[23.077,31],[23.664,29],[24.614,29],[24.915,29],[25.536,29],[26.009,34],[26.572,34],[27.123,34],[27.769,34]],[[0.065,28],[0.587,28],[1.144,28],[1.523,27],[2.512,34],[3.314,34],[3.981,34],[4.699,34],[5.548,34],[6.015,31],[6.943,37],[7.791,37],[8.888,37],[9.358,38],[10.373,30],[10.862,30],[11.359,30],[11.955,30],[12.606,30],[13.044,30],[13.678,30],[13.887,40],[14.437,40],[15.08,41],[15.863,32],[16.272,32],[16.886,32],[17.278,28],[17.808,42],[18.059,43],[18.196,28],[19.156,30],[19.442,30],[20.149,30],[20.874,30],[21.235,30]],[[0.056,31],[0.83,14],[1.367,14],[1.938,14],[2.494,14],[3.081,14],[3.564,34],[4.185,34],[4.63,34],[5.177,34],[5.574,30],[6.124,30],[6.619,30],[7.307,30],[7.739,30],[8.285,30],[8.822,34],[9.118,34],[9.679,34],[10.265,34],[10.571,44],[11.22,44],[11.664,44],[12.192,44],[12.744,44],[13.247,44],[13.796,44],[14.306,44],[14.615,29],[15.218,29],[15.884,29],[16.449,29],[17.033,37],[17.702,37],[18.372,44],[19.193,44],[19.764,44],[20.148,44],[20.581,44],[21.231,27],[21.878,28],[22.547,32],[22.786,28],[23.748,42],[23.897,32],[23.971,45],[25.098,34],[25.535,34],[26.006,34],[26.582,34],[27.063,34],[27.602,34],[28.171,34],[28.394,44],[29.04,44],[29.46,44],[29.984,44],[30.633,44]],[[0.049,44],[0.583,44],[1.115,44],[1.597,44],[2.165,44],[2.681,44],[3.017,37],[3.564,37],[4.133,37],[4.516,46],[5.052,46],[5.605,46],[6.13,46],[6.501,34],[7.03,34],[7.564,34],[8.121,34],[8.628,34],[9.205,34],[9.652,38],[10.31,16],[10.776,16],[11.398,16],[11.881,16],[12.11,16],[12.547,16],[12.727,26],[13.264,26],[13.766,26],[14.284,26],[14.705,34],[15.329,34],[15.745,34],[16.284,34],[16.928,34],[17.498,34],[17.888,27],[18.546,44],[19.088,44],[19.872,44],[20.307,44],[20.948,44],[21.737,44],[22.006,47],[22.886,28],[23.232,28],[23.697,32],[24.14,28],[24.54,28],[24.968,28],[25.269,44],[25.836,44],[26.516,44],[27.12,44],[27.726,44],[28.363,44],[28.836,37],[29.369,37],[29.914,37],[30.344,34],[30.883,34],[31.442,34],[31.957,34],[32.476,34],[33.008,34],[33.358,29],[33.861,29],[34.369,29],[35.088,29],[35.315,27],[36.033,48],[36.669,48],[37.133,49],[37.558,31],[38.512,31],[39.345,43]],[[0.062,34],[0.57,34],[1.105,34],[1.621,34],[2.185,34],[2.696,34],[3.036,29],[3.741,29],[4.376,50],[4.986,50],[5.769,50],[6.279,44],[6.938,44],[7.375,44],[7.919,44],[8.429,44],[8.952,44],[9.399,37],[10.129,37],[10.863,37],[11.6,37],[12.177,34],[12.712,34],[13.383,34],[14.002,34],[14.621,34],[15.141,21],[15.868,21],[16.571,21],[17.228,29],[17.827,29],[18.556,29],[19.056,34],[19.773,34],[20.302,34],[20.89,51],[21.8,16],[22.337,16],[22.911,16],[23.423,16]],[[0.001,31],[1.218,31],[2.488,31],[3.547,37],[4.093,37],[4.632,37],[5.067,29],[5.572,29],[6.148,29],[6.667,29],[7.405,52],[7.88,53],[8.392,53],[8.967,52],[9.389,53],[9.91,53],[10.075,27],[10.637,30],[11.25,30],[11.719,30],[12.237,30],[12.922,30],[13.351,30],[13.726,54],[14.212,55],[14.745,55],[15.296,54],[15.79,55],[16.363,54],[16.847,21],[17.389,21],[18.022,21],[18.922,21],[19.431,21],[19.82,34],[20.267,34],[20.81,34],[21.33,34],[21.851,34],[22.39,34],[22.665,26],[23.157,26],[23.833,26],[24.261,26],[24.641,31],[25.88,31],[27.101,31],[28.246,38],[28.957,28],[29.39,28],[30.025,42],[30.375,32],[30.839,28],[31.233,28]],[[0.058,43],[0.775,43],[1.463,21],[2.018,21],[2.651,21],[3.23,44],[3.841,44],[4.29,44],[4.84,44],[5.353,44],[5.903,44],[6.703,44],[7.495,44],[7.865,44],[7.896,21],[8.326,25],[9.233,25],[9.942,25],[10.551,25],[10.765,37],[11.386,37],[11.892,37],[12.43,37],[12.931,37],[13.232,31],[13.956,34],[14.502,34],[14.983,34],[15.498,34],[16.05,34],[16.561,34],[16.918,28],[17.323,28],[17.724,28],[18.173,28],[18.653,56],[18.996,56],[19.441,28],[19.882,28],[20.256,28],[20.685,28],[20.962,29],[21.448,29],[22.01,29],[22.589,29],[22.943,40],[23.496,40],[24.072,41],[24.551,40],[24.958,44],[25.481,44],[26.012,44],[26.536,44],[27.055,44],[27.719,44],[28.165,44],[28.61,34],[29.446,34],[30.049,34],[30.473,34],[31.071,34],[31.6,51],[31.629,34],[32.14,21],[32.771,21],[33.419,21],[33.984,37],[34.474,37],[35.012,37],[35.467,31],[36.155,44],[36.742,44],[37.522,44],[38.057,44],[38.511,44],[39.043,44],[39.17,32],[39.781,32],[40.137,28],[40.562,32],[40.946,28],[41.476,42],[41.57,58],[42.228,37],[43.011,37],[43.518,37],[44.008,37],[44.22,44],[44.848,44],[45.345,44],[45.873,44],[46.391,44],[46.897,34],[47.303,34],[47.895,34],[48.556,34],[48.914,34],[49.352,40],[49.743,40],[50.322,40],[50.979,41]],[[0.085,28],[0.455,28],[0.902,28],[1.347,32],[1.74,28],[2.207,28],[2.613,28],[3.059,32],[3.585,28],[3.894,28],[4.047,44],[4.618,44],[5.17,44],[5.745,44],[6.29,44],[6.878,44],[7.327,27],[8.022,31],[8.944,40],[9.44,40],[9.97,40],[10.596,44],[11.092,44],[11.618,44],[12.188,44],[12.757,44],[13.549,44],[13.714,34],[14.341,34],[14.822,34],[15.362,34],[15.896,34],[16.436,34],[16.699,28],[17.14,28],[17.542,28],[18.0,56],[18.411,28],[18.767,46],[19.399,46],[19.981,46],[20.639,46],[21.264,46],[21.712,27],[22.438,37],[23.071,37],[23.686,37],[24.227,34],[24.777,34],[25.429,34],[25.832,34],[26.324,34],[26.873,34],[27.225,38],[28.131,35],[28.788,36],[29.506,59]],[[0.002,44],[0.538,44],[1.013,44],[1.593,44],[2.112,44],[2.662,44],[2.962,27],[3.597,28],[3.959,28],[4.428,32],[4.857,28],[5.305,28],[5.714,28],[6.167,32],[6.597,28],[6.97,60],[7.445,61],[7.981,61],[8.507,61],[8.785,38],[9.623,38],[10.381,37],[10.906,37],[11.442,37],[11.851,34],[12.37,34],[13.001,34],[13.491,34],[14.043,34],[14.653,34],[15.097,34],[15.392,44],[15.933,44],[16.555,44],[17.014,44],[17.551,44],[18.157,44],[18.578,44],[19.13,44],[19.421,31],[20.191,31],[20.976,29],[21.601,29],[21.996,29],[22.486,27],[23.096,46],[23.607,46],[24.153,46],[24.69,46],[25.216,46],[25.603,34],[26.116,34],[26.769,34],[27.178,34],[27.7,34],[28.243,34],[28.723,34],[29.234,34],[29.52,44],[30.078,44],[30.702,44],[31.088,44],[31.669,44],[32.187,44],[32.689,44],[33.225,44],[33.588,26],[34.098,26],[34.675,26],[35.173,26],[35.577,43],[36.38,51],[37.371,62],[38.388,28],[38.83,56],[39.236,28],[39.706,28],[40.131,28],[40.559,56]],[[0.002,63],[0.448,63],[0.896,63],[1.314,63],[1.747,63],[1.98,64],[2.414,64],[2.881,64],[3.28,64],[3.732,64],[3.971,4],[4.424,4],[4.868,4],[5.28,4],[5.704,4],[6.023,17],[6.471,17],[6.872,17],[7.316,17],[7.747,17],[8.023,18],[8.468,18],[8.863,18],[9.313,18],[9.841,18],[10.166,13],[10.69,13],[11.198,13],[11.38,13],[11.748,13],[12.018,34],[12.462,34],[12.944,34],[13.402,34],[13.886,34],[14.255,27],[14.95,65],[15.44,65],[15.976,65],[16.461,23],[17.0,23],[17.534,23],[17.93,37],[18.579,37],[19.162,27],[19.747,34],[20.198,34],[20.676,34],[21.131,34],[21.612,34],[22.007,46],[22.646,46],[23.261,46],[23.843,41],[24.409,40],[25.103,40],[25.631,16],[26.069,16],[26.475,16],[26.913,16],[27.345,16],[27.859,16],[27.994,31],[28.76,31],[29.531,66],[30.521,59],[33.506,27],[34.007,55],[34.54,55],[35.087,55],[35.524,20],[36.173,20],[36.535,19],[36.779,34],[37.181,34],[37.632,34],[38.132,34],[38.666,34],[38.961,31]]],"bossPool":[27,29,31,38,67],"boss":{"summon":{"first":13.235,"interval":29.957,"count":5,"pause":2.5},"stomp":{"first":27.834,"interval":55,"radius":30,"stun":5,"pause":3,"flying":3},"flask":{"first":7.534,"interval":28.177,"ahead":12,"radius":9,"duration":30,"healingPerSecond":100,"pause":3},"toxic":{"first":19.736,"interval":30.613,"radius":28,"splash":5,"duration":10,"cooldownMultiplier":2.5,"targets":4,"pause":5},"rage":{"healthFraction":0.5,"speedMultiplier":1.6,"pause":4,"healingPerSecond":750,"healingDuration":4},"assumptions":["Attack first delays and repeated intervals are observed in simulation seconds in this recording.","Flask puddles are approximated by one path zone; projectile spread and overlap vary.","Rage healing duration is approximated by the observed client animation duration.","Toxic target selection and movement pauses are approximated."]},"waveEconomy":{"base":200,"increment":150,"clearSolo":0.35,"clearTeam":0.2},"uncertainties":["One recorded win does not measure a win rate.","Enemy modifiers, spawn jitter and boss decisions can differ.","Simulation uses approximate projectile, shotgun and splash damage and conservative tower effectiveness.","Spawner units, DOT, charged attacks, complex buffs and ability damage are not fully simulated.","Ghoul variants are conservatively treated as hidden.","Co-op simulation assumes no allied damage and splits kill cash; it cannot plan other players actions.","The native placement server remains authoritative."],"references":["https://tds.wiki/w/Intermediate_Mode","https://tds.wiki/w/Patient_Zero","https://tds.wiki/w/Defense"]}]==])
 local function plannerMessage(message: string)
     if planner.message == message then return end
     planner.message = message
@@ -1806,23 +1874,34 @@ end
 local function plannerRulesKey(): string
     local p = PlayerReplicator.GetLocalPlayerRaw()
     local scale: any = ReplicatedStorage.State:FindFirstChild("PriceScale")
-    return table.concat({tostring(p and p.Team), tostring(GameState.Difficulty), tostring(GameState.GameMode), tostring(game.PlaceVersion), tostring(enabled), tostring(wallPlacement), tostring(GameState.IsModifierEnabled("Fog")), tostring(GameState.IsModifierEnabled("Inflation")), tostring(GameRules.Get("TowerRangeMultiplier")), tostring(GameRules.Get("UpgradeCostMultiplier")), tostring(scale and scale.Value)}, "|")
+    return table.concat({tostring(p and p.Team), tostring(GameState.Difficulty), tostring(GameState.GameMode), tostring(game.PlaceVersion), tostring(enabled), tostring(wallPlacement), tostring(GameState.IsModifierEnabled("AllPaths")), tostring(planner.composition), tostring(GameState.IsModifierEnabled("Fog")), tostring(GameState.IsModifierEnabled("Inflation")), tostring(GameRules.Get("TowerRangeMultiplier")), tostring(GameRules.Get("UpgradeCostMultiplier")), tostring(scale and scale.Value)}, "|")
 end
 local function plannerSites(asset: any, stages: any, routes: any, team: any, token: number): any
     local surfaces = advisorSurfaces(asset.Properties.Class)
     local largest = 0
     for _, stage in ipairs(stages) do largest = math.max(largest, stage.range) end
-    local ranked = {}
-    local seen = {}
+    local ranked, seen = {}, {}
+    local function spanLength(spans: any, after: number?): number
+        local amount = 0
+        for _, span in ipairs(spans or {}) do amount += math.max(0, span[2] - math.max(span[1], after or 0)) end
+        return amount
+    end
     local function add(x: number, z: number)
         local key = math.round(x) .. ":" .. math.round(z)
         if seen[key] then return end
         seen[key] = true
         local point = advisorProject(x, z, surfaces)
         if not point then return end
-        local intervals = StrategyModel.intervals(point, largest, stages[#stages].deadzone, routes)
-        local coverage = StrategyModel.coverage(intervals, routes)
-        if coverage > 0 then table.insert(ranked, {point = point, score = coverage}) end
+        local base = StrategyModel.intervals(point, stages[1].range, stages[1].deadzone, routes)
+        local maximum = StrategyModel.intervals(point, largest, stages[#stages].deadzone, routes)
+        local scores, late, total, balance = {}, {}, 0, math.huge
+        for index, route in ipairs(routes) do
+            scores[index] = spanLength(base[index]) * 0.6 + spanLength(maximum[index]) * 0.4
+            late[index] = spanLength(maximum[index], route.length * 0.7)
+            total += scores[index]
+            balance = math.min(balance, scores[index] / route.length)
+        end
+        if total > 0 then table.insert(ranked, {point = point, score = total / #routes, scores = scores, late = late, balance = balance}) end
     end
     for _, route in ipairs(routes) do
         local count = math.max(16, math.min(50, math.ceil(route.length / math.max(4, largest * 0.3))))
@@ -1842,36 +1921,40 @@ local function plannerSites(asset: any, stages: any, routes: any, team: any, tok
         add(part.Position.X, part.Position.Z)
         if index % 40 == 0 then plannerCheck(token) end
     end
-    table.sort(ranked, function(a, b) return a.score > b.score end)
-    local sites = {}
-    for _, candidate in ipairs(ranked) do
-        local apart = true
-        for _, site in ipairs(sites) do if (site.point - candidate.point).Magnitude < math.max(3, largest * 0.25) then apart = false; break end end
-        if not apart then continue end
-        local valid = validateAdvisorPoint(asset.Name or "", candidate.point, team)
-        if valid then
-            local intervals = {}
-            for level, stage in ipairs(stages) do intervals[level] = StrategyModel.intervals(candidate.point, stage.range, stage.deadzone, routes) end
-            for level, stage in ipairs(stages) do if stage.globalUnits then intervals[level] = {}; for routeIndex, route in ipairs(routes) do intervals[level][routeIndex] = {{0, route.length}} end end end
-            table.insert(sites, {point = candidate.point, intervals = intervals, score = candidate.score})
-        end
-        if #sites >= 5 then break end
-    end
-    local late: any = nil
-    local lateScore = 0
-    local after = 0
-    for _, route in ipairs(routes) do after += route.length * 0.7 / #routes end
-    for _, candidate in ipairs(ranked) do
-        local intervals = StrategyModel.intervals(candidate.point, largest, stages[#stages].deadzone, routes)
-        local score = StrategyModel.coverage(intervals, routes, after)
-        if score > lateScore then lateScore = score; late = candidate end
-    end
-    if late and validateAdvisorPoint(asset.Name or "", late.point, team) then
+    local sites, chosen, validity = {}, {}, {}
+    local function insert(candidate: any, apart: number): boolean
+        if chosen[candidate] then return false end
+        for _, site in ipairs(sites) do if (site.point - candidate.point).Magnitude < apart then return false end end
+        if validity[candidate] == nil then validity[candidate] = validateAdvisorPoint(asset.Name or "", candidate.point, team) ~= nil end
+        if not validity[candidate] then return false end
         local intervals = {}
-        for level, stage in ipairs(stages) do intervals[level] = StrategyModel.intervals(late.point, stage.range, stage.deadzone, routes) end
-        for level, stage in ipairs(stages) do if stage.globalUnits then intervals[level] = {}; for routeIndex, route in ipairs(routes) do intervals[level][routeIndex] = {{0, route.length}} end end end
-        table.insert(sites, {point = late.point, intervals = intervals, score = lateScore})
+        for level, stage in ipairs(stages) do
+            intervals[level] = StrategyModel.intervals(candidate.point, stage.range, stage.deadzone, routes)
+            if stage.globalUnits then
+                intervals[level] = {}
+                for routeIndex, route in ipairs(routes) do intervals[level][routeIndex] = {{0, route.length}} end
+            end
+        end
+        table.insert(sites, {point = candidate.point, intervals = intervals, score = candidate.score})
+        chosen[candidate] = true
+        return true
     end
+    local function choose(score: any, count: number, apart: number)
+        table.sort(ranked, function(a, b) return score(a) > score(b) end)
+        local added = 0
+        for index, candidate in ipairs(ranked) do
+            if score(candidate) <= 0 then break end
+            if insert(candidate, apart) then added += 1 end
+            if added >= count or index >= 60 then break end
+        end
+        plannerCheck(token)
+    end
+    if #routes > 1 then
+        choose(function(candidate: any) return candidate.balance end, 1, 1)
+        for route in ipairs(routes) do choose(function(candidate: any) return candidate.scores[route] end, 1, 2) end
+    end
+    choose(function(candidate: any) return candidate.score end, if #routes > 1 then 3 else 5, math.max(3, largest * 0.2))
+    for route in ipairs(routes) do choose(function(candidate: any) return candidate.late[route] end, 1, 2) end
     return sites
 end
 local function plannerModel(token: number): any
@@ -1881,6 +1964,22 @@ local function plannerModel(token: number): any
     assert(p and workspace:FindFirstChild("Map"), "Wait for the match map and player data.")
     assert(tonumber(p.Replicator:Get("Cash")) ~= nil, "Wait for your cash to replicate before planning.")
     local routes = advisorRoutes(p.Team)
+    local allPaths = GameState.IsModifierEnabled("AllPaths") == true
+    local routeIndex = {}
+    local shortest = 1
+    for index, route in ipairs(routes) do
+        routeIndex[route.id] = index
+        if route.length < routes[shortest].length then shortest = index end
+    end
+    local scheduled = 0
+    for _, wave in ipairs(plannerProfile.waves) do
+        for _, entry in ipairs(wave) do
+            local info = plannerProfile.types[entry[2]]
+            scheduled += if allPaths and not info.boss and not info.spawnOnce then #routes else 1
+        end
+    end
+    planner.mapInfo = {map = GameState.MapName, routes = #routes, allPaths = allPaths, scheduled = scheduled}
+    if plannerMapStatus then plannerMapStatus:SetDesc(GameState.MapName .. " | " .. #routes .. " enemy routes | " .. (if allPaths then "All Paths: ordinary spawns on every route" else "Wave spawns distributed over routes") .. "\n" .. scheduled .. " scheduled enemies; boss spawn exceptions applied.") end
     local defs, warnings = {}, {}
     local inventory = advisorCache("Inventory.Troops"):GetValue()
     if not inventory then local ok, value = advisorCache("Inventory.Troops"):Download(false):await(); if ok then inventory = value end end
@@ -1931,7 +2030,11 @@ local function plannerModel(token: number): any
                 local definition = {name = name, stages = stages, price = price, path = branch, boundary = tonumber(asset.Properties.BoundarySize) or 2, kind = if name == "DJ Booth" then "support" else if stages[#stages].income > 0 and stages[#stages].dps == 0 then "economy" else "damage", sites = {}}
                 local nativeAsset = table.clone(asset)
                 nativeAsset.Name = name
-                definition.sites = plannerSites(nativeAsset, stages, routes, p.Team, token)
+                local scanned, sites = pcall(plannerSites, nativeAsset, stages, routes, p.Team, token)
+                if not scanned then
+                    if planner.token ~= token then error(sites, 0) end
+                    warnings[name .. ": " .. tostring(sites)] = true
+                else definition.sites = sites end
                 if #definition.sites > 0 then
                     table.insert(defs, definition)
                     if stages[#stages].dps + stages[#stages].unitDps > 0 then damaging += 1 end
@@ -1948,14 +2051,36 @@ local function plannerModel(token: number): any
     for entity in pairs(PlayerReplicator.GetPlayers()) do if entity.Player and tostring(entity.Team) == tostring(p.Team) then players += 1 end end
     players = math.max(1, players)
     local limit = GameState.GetTowerCount(p.Team)
-    return {defs = defs, routes = routes, profile = plannerProfile, spectra = StrategyModel.spectra(plannerProfile), team = p.Team, map = workspace:FindFirstChild("Map"), mapName = GameState.MapName, loadoutKey = plannerLoadoutKey(), rulesKey = plannerRulesKey(), stacking = enabled, sellIdle = planner.sellIdle, warnings = warningList, players = players, cap = tonumber(limit) or 40, startCash = if (tonumber(GameState.Wave) or 0) == 0 then cash() else 600, startHealth = tonumber(GameState.MaxHealth) or 100, bonusScale = if players == 1 then 1 else if players == 2 then 0.88 else if players == 3 then 0.79 else 0.76}
+    return {defs = defs, routes = routes, routeIndex = routeIndex, allPaths = allPaths, scheduled = scheduled, stressBossRoute = shortest, profile = plannerProfile, spectra = StrategyModel.spectra(plannerProfile), team = p.Team, map = workspace:FindFirstChild("Map"), mapName = GameState.MapName, loadoutKey = plannerLoadoutKey(), rulesKey = plannerRulesKey(), stacking = enabled, sellIdle = planner.sellIdle, warnings = warningList, players = players, cap = tonumber(limit) or 40, startCash = if (tonumber(GameState.Wave) or 0) == 0 then cash() else 600, startHealth = tonumber(GameState.MaxHealth) or 100, bonusScale = if players == 1 then 1 else if players == 2 then 0.88 else if players == 3 then 0.79 else 0.76}
 end
 local function plannerPolicies(model: any): {any}
-    local result = {}
+    local result: {any} = {}
+    local limits, choices = {}, {}
+    local remaining = model.cap
+    for _, def in ipairs(model.defs) do
+        if not choices[def.name] then
+            choices[def.name] = def
+            limits[def.name] = 0
+            if def.kind ~= "damage" then limits[def.name] = if def.kind == "economy" then math.min(4, def.stages[1].limit) else 1; remaining -= limits[def.name] end
+        end
+    end
+    while remaining > 0 do
+        local selected: any = nil
+        for _, def in ipairs(model.defs) do
+            if def.kind ~= "damage" or limits[def.name] >= def.stages[1].limit then continue end
+            if not selected or limits[def.name] < limits[selected.name] then selected = def end
+        end
+        if not selected then break end
+        limits[selected.name] += 1
+        remaining -= 1
+    end
+    for _, upgrade in ipairs({0.8, 1.3, 2}) do
+        table.insert(result, {label = "Mixed loadout", limits = limits, upgrade = upgrade, place = 1, buildRate = 1.5, earlyCap = 2, site = 1, hiddenPenalty = 0.35, saveSeconds = if upgrade < 1 then 0 else 120, savePatience = 60, supportAt = 4})
+    end
     for _, upgrade in ipairs({0.8, 1.3, 2}) do
         for _, buildRate in ipairs({0.35, 0.85, 1.5}) do
             for _, site in ipairs({1, 3}) do
-                table.insert(result, {upgrade = upgrade, place = 1, buildRate = buildRate, earlyCap = 2, site = site, hiddenPenalty = 0.35, saveSeconds = if upgrade > 1 then 18 else 0, supportAt = if upgrade > 1 then 5 else 100})
+                table.insert(result, {label = "Focused value", upgrade = upgrade, place = 1, buildRate = buildRate, earlyCap = 2, site = site, hiddenPenalty = 0.35, saveSeconds = if upgrade > 1 then 18 else 0, supportAt = if upgrade > 1 then 5 else 100})
             end
         end
     end
@@ -1964,7 +2089,15 @@ local function plannerPolicies(model: any): {any}
         if def.kind ~= "damage" then continue end
         if favorites[def.name] then continue end
         favorites[def.name] = true
-        table.insert(result, 4, {upgrade = 1.7, place = 1, buildRate = 0.85, earlyCap = 2, site = 1, hiddenPenalty = 0.35, saveSeconds = 25, supportAt = 5, favorite = def.name, favoriteWeight = 1.7})
+        table.insert(result, 4, {label = "Tower focus: " .. def.name, upgrade = 1.7, place = 1, buildRate = 0.85, earlyCap = 2, site = 1, hiddenPenalty = 0.35, saveSeconds = 120, savePatience = 60, supportAt = 5, favorite = def.name, favoriteWeight = 1.7})
+    end
+    if planner.composition == "Mixed attack towers" then
+        result = {}
+        for _, upgrade in ipairs({0.8, 1.3, 2}) do
+            for _, site in ipairs({1, 3}) do
+                table.insert(result, {label = "Mixed loadout", limits = limits, upgrade = upgrade, place = 1, buildRate = 1.5, earlyCap = 2, site = site, hiddenPenalty = 0.35, saveSeconds = if upgrade < 1 then 0 else 120, savePatience = 60, supportAt = 4})
+            end
+        end
     end
     return result
 end
@@ -1988,7 +2121,7 @@ local function plannerSave()
         table.insert(sites, {name = def.name, branch = def.path, sites = points})
     end
     pcall(function()
-        writefile("OzanHub/strategy-last.json", game:GetService("HttpService"):JSONEncode({schema = "ozan-strategy/v1", map = plan.model.mapName, difficulty = GameState.Difficulty, version = game.PlaceVersion, loadout = plan.model.loadoutKey, profile = plannerProfile.recording, policy = plan.policy, result = plan.result, stress = plan.stress, searched = plan.searched, warnings = plan.model.warnings, sites = sites, execution = planner.reports}))
+        writefile("OzanHub/strategy-last.json", game:GetService("HttpService"):JSONEncode({schema = "ozan-strategy/v2", map = plan.model.mapName, routeCount = #plan.model.routes, allPaths = plan.model.allPaths, scheduledEnemies = plan.model.scheduled, difficulty = GameState.Difficulty, version = game.PlaceVersion, loadout = plan.model.loadoutKey, profile = plannerProfile.recording, policy = plan.policy, roster = plan.roster, considered = plan.considered, result = plan.result, stress = plan.stress, searched = plan.searched, warnings = plan.model.warnings, sites = sites, execution = planner.reports}))
     end)
 end
 local function plannerBegin()
@@ -2031,7 +2164,19 @@ local function plannerCalculate(startAfter: boolean?)
                     if best and os.clock() >= deadline then error("STRATEGY_SEARCH_BUDGET", 0) end
                 end
                 local completed, result, stressed = pcall(function()
-                    return StrategyModel.simulate(model, policy, {damage = 0.78, health = 1.05, speed = 1.03, stun = 1, seed = 7}, checkpoint), StrategyModel.simulate(model, policy, {damage = 0.6, health = 1.2, speed = 1.1, stun = 1.3, seed = 31}, checkpoint)
+                    local baseline = StrategyModel.simulate(model, policy, {damage = 0.78, health = 1.05, speed = 1.03, stun = 1, seed = 7, bossRoute = 1}, checkpoint)
+                    local worst = StrategyModel.simulate(model, policy, {damage = 0.6, health = 1.2, speed = 1.1, stun = 1.3, seed = 31, bossRoute = model.stressBossRoute}, checkpoint)
+                    local bossRoutes = {model.stressBossRoute}
+                    if worst.reached == #model.profile.waves then
+                        for route in ipairs(model.routes) do
+                            if route == model.stressBossRoute then continue end
+                            local variant = StrategyModel.simulate(model, policy, {damage = 0.6, health = 1.2, speed = 1.1, stun = 1.3, seed = 31, bossRoute = route}, checkpoint)
+                            table.insert(bossRoutes, route)
+                            if StrategyModel.rank(variant, variant) < StrategyModel.rank(worst, worst) then worst = variant end
+                        end
+                    end
+                    worst.bossRoutesEvaluated = bossRoutes
+                    return baseline, worst
                 end)
                 if not completed then if tostring(result):find("STRATEGY_SEARCH_BUDGET", 1, true) then break else error(result, 0) end end
                 tested += 1
@@ -2043,10 +2188,16 @@ local function plannerCalculate(startAfter: boolean?)
             assert(token == planner.token, "Planning cancelled.")
             planner.plan = best
             planner.busy = false
+            best.roster, best.considered = {}, {}
+            for _, def in ipairs(model.defs) do best.considered[def.name] = true end
+            for _, action in ipairs(best.result.actions) do if action.kind == "place" then best.roster[action.name] = (best.roster[action.name] or 0) + 1 end end
+            local roster = {}
+            for name, amount in pairs(best.roster) do table.insert(roster, name .. " x" .. amount) end
+            table.sort(roster)
             plannerSave()
             local result = best.result
             local message = string.format("%s\nSearched %d policies. Baseline reached wave %d (%s); stress test reached %d (%s).\n%s\nThis is a simulation estimate from one recording, not a measured win rate.", if result.won or best.stress.won then "A simulated winning strategy was found." else "No simulated win found; selected the farthest-wave strategy.", tested, result.reached, if result.won then "win" else "loss", best.stress.reached, if best.stress.won then "win" else "loss", if #model.warnings > 0 then table.concat(model.warnings, "\n") else "Direct tower models available for this loadout.")
-            plannerMessage(message)
+            plannerMessage(message .. "\nPlanned purchases: " .. (if #roster > 0 then table.concat(roster, ", ") else "none affordable in this simulation") .. "\n" .. (best.policy.label or "Tower focus") .. " | " .. #model.routes .. " routes | " .. model.scheduled .. " scheduled enemies")
             if startAfter then plannerBegin() end
         end)
         if token == planner.token then
@@ -2081,10 +2232,19 @@ local function plannerEnemyState(model: any): any
     for _, node in ipairs(Collection:GetTagged("Enemies")) do
         local enemy = plannerNPC.GetNPCFromFolder(node)
         if enemy and enemy.Type == "Enemies" and (tonumber(enemy.Health) or 0) > 0 and tostring(enemy.PathTeam) == tostring(model.team) then
-            table.insert(enemies, {live = enemy, distance = tonumber(enemy.PathDistance) or 0, path = enemy.PathName})
+            table.insert(enemies, {live = enemy, distance = tonumber(enemy.PathDistance) or 0, path = enemy.PathName, route = model.routeIndex and model.routeIndex[tostring(enemy.PathName)] or 0})
         end
     end
     return enemies
+end
+local function plannerRemainingRoutes(model: any, enemies: any): any
+    local after = {}
+    for index in ipairs(model.routes) do after[index] = math.huge end
+    for _, enemy in ipairs(enemies) do
+        if enemy.route and enemy.route > 0 then after[enemy.route] = math.min(after[enemy.route], enemy.distance)
+        else for index in ipairs(model.routes) do after[index] = math.min(after[index], enemy.distance) end end
+    end
+    return after
 end
 local function plannerLog(kind: string, data: any)
     planner.actions += 1
@@ -2143,13 +2303,12 @@ local function plannerAct()
     local finalEntries = plan.model.profile.waves[finalWave]
     local scheduledDone = wave >= finalWave and planner.sim - planner.waveStart >= finalEntries[#finalEntries][1] + 5
     if scheduledDone and planner.sellIdle and #enemies > 0 then
-        local furthestBack = math.huge
-        for _, enemy in ipairs(enemies) do furthestBack = math.min(furthestBack, enemy.distance) end
+        local remaining = plannerRemainingRoutes(plan.model, enemies)
         for _, tower in ipairs(towers) do
             if not planner.owned[tower.live.Model] or tower.def.kind == "support" then continue end
             local stage = tower.def.stages[tower.level + 1]
             local intervals = tower.def.sites[tower.site].intervals[tower.level + 1]
-            if tower.def.kind == "economy" or (StrategyModel.coverage(intervals, plan.model.routes, furthestBack) <= 0 and furthestBack > stage.range) then
+            if tower.def.kind == "economy" or (stage.unitDps == 0 and StrategyModel.coverage(intervals, plan.model.routes, remaining) <= 0) then
                 local key = "sell:" .. tostring(tower.live.UID)
                 if (planner.retry[key] or 0) > os.clock() then continue end
                 planner.retry[key] = os.clock() + 5
@@ -2160,10 +2319,9 @@ local function plannerAct()
             end
         end
     end
-    local after: number? = nil
+    local after: any = nil
     if scheduledDone and #enemies > 0 then
-        after = math.huge
-        for _, enemy in ipairs(enemies) do after = math.min(after :: number, enemy.distance) end
+        after = plannerRemainingRoutes(plan.model, enemies)
     end
     if planner.useAbilities and #enemies > 0 and planner.sim >= planner.abilityCheck then
         planner.abilityCheck = planner.sim + 2
@@ -2174,7 +2332,7 @@ local function plannerAct()
     local function actionKey(action: any): string
         return action.kind .. ":" .. action.def.name .. ":" .. tostring(action.site) .. ":" .. tostring(action.tower and action.tower.live.UID or action.level)
     end
-    local action = StrategyModel.action(plan.model.defs, towers, budget, wave, plan.policy, plan.model.routes, tonumber(GameState.GetTowerCount(plan.model.team)) or plan.model.cap, after, {spectra = plan.model.spectra, stacking = enabled, blocked = function(candidate: any) return (planner.retry[actionKey(candidate)] or 0) > os.clock() end})
+    local action = StrategyModel.action(plan.model.defs, towers, budget, wave, plan.policy, plan.model.routes, tonumber(GameState.GetTowerCount(plan.model.team)) or plan.model.cap, after, {spectra = plan.model.spectra, stacking = enabled, allPaths = plan.model.allPaths, blocked = function(candidate: any) return (planner.retry[actionKey(candidate)] or 0) > os.clock() end})
     if action then
         local key = actionKey(action)
         planner.retry[key] = os.clock() + 1
@@ -2234,6 +2392,8 @@ end)
 
 local StrategyTab = Window:AddTab({Title = "Strategy", Icon = "brain"})
 StrategyTab:AddParagraph({Title = "Map and loadout strategy", Content = "Intermediate model from one recorded win. Searches your equipped loadout, map positions, saving and upgrade policies. A win ranks first; otherwise it chooses the farthest simulated wave. Complex attacks, abilities and units are approximated. Results are estimates, not a proven win rate."})
+plannerMapStatus = StrategyTab:AddParagraph({Title = "Map spawn scan", Content = "Calculate to inspect the current routes and All Paths modifier."})
+StrategyTab:AddDropdown("StrategyComposition", {Title = "Tower composition", Values = {"Automatic", "Mixed attack towers"}, Default = 1, Multi = false, Callback = function(value: string) planner.composition = value end})
 StrategyTab:AddSlider("StrategySearchSeconds", {Title = "Search budget (real seconds)", Default = 45, Min = 15, Max = 120, Rounding = 0, Callback = function(value: number) planner.seconds = value end})
 StrategyTab:AddToggle("StrategyAutoReady", {Title = "Ready automatically after planning", Default = true, Callback = function(value: boolean) planner.autoReady = value end})
 StrategyTab:AddToggle("StrategyAbilities", {Title = "Use ready abilities", Default = true, Callback = function(value: boolean) planner.useAbilities = value end})
@@ -2244,7 +2404,7 @@ StrategyTab:AddButton({Title = "Start Calculated Strategy", Callback = function(
 StrategyTab:AddButton({Title = "Stop Strategy", Callback = function() plannerStop("Strategy stopped. Existing towers remain in the match."); plannerSave() end})
 plannerStatus = StrategyTab:AddParagraph({Title = "Strategy status", Content = planner.message})
 
-return {State = function() return {busy = planner.busy, running = planner.running, message = planner.message, actions = planner.actions, planned = planner.plan ~= nil} end, Calculate = plannerCalculate, Stop = plannerStop}
+return {State = function() return {busy = planner.busy, running = planner.running, message = planner.message, actions = planner.actions, planned = planner.plan ~= nil, mapInfo = planner.mapInfo, roster = planner.plan and planner.plan.roster, considered = planner.plan and planner.plan.considered} end, Calculate = plannerCalculate, Stop = plannerStop}
 end)()
 
 local api = Instance.new("BindableFunction")
