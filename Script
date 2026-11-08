@@ -1817,7 +1817,7 @@ function StrategyModel.simulate(model: any, policy: any, stress: any, checkpoint
     return {won = false, cleared = cleared, reached = wave, health = math.max(0, health), cash = cash, killed = killed, leaked = leaked, elapsed = time, bossProgress = bossRemaining, bossActions = bossActions, scheduledByRoute = scheduledByRoute, actions = log}
 end
 
-local planner: any = {token = 0, busy = false, running = false, plan = nil, message = "Calculate a strategy before starting.", seconds = 45, autoReady = true, useAbilities = true, sellIdle = true, composition = "Automatic", reports = {}, owned = {}, retry = {}, actions = 0, sim = 0, wave = -1, waveStart = 0, abilityCheck = 0}
+local planner: any = {token = 0, busy = false, running = false, plan = nil, message = "Calculate a strategy before starting.", maxStrategies = 250, limitSearchTime = false, seconds = 45, autoReady = true, useAbilities = true, sellIdle = true, composition = "Automatic", reports = {}, owned = {}, retry = {}, actions = 0, sim = 0, wave = -1, waveStart = 0, abilityCheck = 0}
 local plannerStatus: any = nil
 local plannerMapStatus: any = nil
 local plannerVoteFolder: any = nil
@@ -2099,7 +2099,34 @@ local function plannerPolicies(model: any): {any}
             end
         end
     end
-    return result
+    local limit = math.clamp(math.round(tonumber(planner.maxStrategies) or 250), 1, 250)
+    local distinct: {any} = {}
+    local seen = {}
+    local function add(policy: any)
+        if #distinct >= limit then return end
+        local key = table.concat({tostring(policy.limits ~= nil), tostring(policy.upgrade), tostring(policy.place), tostring(policy.buildRate), tostring(policy.earlyCap), tostring(policy.site), tostring(policy.hiddenPenalty), tostring(policy.saveSeconds or 0), tostring(if (policy.saveSeconds or 0) > 0 then policy.savePatience or 10 else 0), tostring(policy.supportAt), tostring(policy.favorite or ""), tostring(if policy.favorite then policy.favoriteWeight or 1.4 else 0)}, "|")
+        if seen[key] then return end
+        seen[key] = true
+        table.insert(distinct, policy)
+    end
+    for _, policy in ipairs(result) do add(policy) end
+    local names, maxSites = {}, 1
+    local known = {}
+    for _, def in ipairs(model.defs) do
+        maxSites = math.max(maxSites, #def.sites)
+        if def.kind == "damage" and not known[def.name] then table.insert(names, def.name); known[def.name] = true end
+    end
+    table.sort(names)
+    local upgrades, builds, savings, early = {0.55, 0.8, 1.05, 1.3, 1.7, 2.2, 3}, {0.2, 0.4, 0.7, 1, 1.5}, {0, 25, 60, 120}, {1, 2, 4}
+    for index = 0, 419 do
+        if #distinct >= limit then break end
+        local mixed = planner.composition == "Mixed attack towers" or index % 2 == 0
+        local favoriteIndex = (index + math.floor(index / 5)) % (#names + 1)
+        local favorite = if favoriteIndex > 0 then names[favoriteIndex] else nil
+        add({label = if mixed then "Mixed loadout" else if favorite then "Tower focus: " .. favorite else "Focused value", limits = if mixed then limits else nil, upgrade = upgrades[index % #upgrades + 1], place = 1, buildRate = builds[(index * 2) % #builds + 1], earlyCap = early[(index * 2) % #early + 1], site = (index * 5 + math.floor(index / 7)) % maxSites + 1, hiddenPenalty = 0.35, saveSeconds = savings[(index * 3) % #savings + 1], savePatience = if index % 2 == 0 then 60 else 30, supportAt = ({3, 5, 10, 100})[(index + math.floor(index / 11)) % 4 + 1], favorite = favorite, favoriteWeight = if favorite then ({1.2, 1.7, 2.5})[(index + math.floor(index / 3)) % 3 + 1] else nil})
+    end
+    assert(#distinct == limit, "The requested number of distinct strategy candidates could not be generated.")
+    return distinct
 end
 local function plannerDisableOtherAutomation()
     for _, name in ipairs({"AutoUpgradeAll", "AutoUseAbilities", "AutoSkipWaves"}) do
@@ -2121,7 +2148,7 @@ local function plannerSave()
         table.insert(sites, {name = def.name, branch = def.path, sites = points})
     end
     pcall(function()
-        writefile("OzanHub/strategy-last.json", game:GetService("HttpService"):JSONEncode({schema = "ozan-strategy/v2", map = plan.model.mapName, routeCount = #plan.model.routes, allPaths = plan.model.allPaths, scheduledEnemies = plan.model.scheduled, difficulty = GameState.Difficulty, version = game.PlaceVersion, loadout = plan.model.loadoutKey, profile = plannerProfile.recording, policy = plan.policy, roster = plan.roster, considered = plan.considered, result = plan.result, stress = plan.stress, searched = plan.searched, warnings = plan.model.warnings, sites = sites, execution = planner.reports}))
+        writefile("OzanHub/strategy-last.json", game:GetService("HttpService"):JSONEncode({schema = "ozan-strategy/v2", map = plan.model.mapName, routeCount = #plan.model.routes, allPaths = plan.model.allPaths, scheduledEnemies = plan.model.scheduled, difficulty = GameState.Difficulty, version = game.PlaceVersion, loadout = plan.model.loadoutKey, profile = plannerProfile.recording, policy = plan.policy, roster = plan.roster, considered = plan.considered, result = plan.result, stress = plan.stress, searched = plan.searched, strategyLimit = plan.strategyLimit, stopReason = plan.stopReason, warnings = plan.model.warnings, sites = sites, execution = planner.reports}))
     end)
 end
 local function plannerBegin()
@@ -2153,19 +2180,24 @@ local function plannerCalculate(startAfter: boolean?)
         local ok, problem = pcall(function()
             local model = plannerModel(token)
             local candidates = plannerPolicies(model)
-            local deadline = os.clock() + planner.seconds
+            local deadline = if planner.limitSearchTime then os.clock() + planner.seconds else math.huge
             local best: any = nil
             local tested = 0
+            local stopReason = "strategy_limit"
             for index, policy in ipairs(candidates) do
-                if best and os.clock() >= deadline then break end
+                if best and os.clock() >= deadline then stopReason = "time_limit"; break end
                 plannerMessage("Searching strategy " .. index .. "/" .. #candidates .. "...\nBest tested wave: " .. tostring(best and best.result.reached or 0))
+                local candidateWon = false
                 local function checkpoint()
                     plannerCheck(token)
-                    if best and os.clock() >= deadline then error("STRATEGY_SEARCH_BUDGET", 0) end
+                    if best and not candidateWon and os.clock() >= deadline then error("STRATEGY_SEARCH_BUDGET", 0) end
                 end
                 local completed, result, stressed = pcall(function()
                     local baseline = StrategyModel.simulate(model, policy, {damage = 0.78, health = 1.05, speed = 1.03, stun = 1, seed = 7, bossRoute = 1}, checkpoint)
+                    candidateWon = baseline.won
+                    if baseline.won then plannerMessage("Strategy " .. index .. " won the baseline simulation. Checking this plan's stress outcome...") end
                     local worst = StrategyModel.simulate(model, policy, {damage = 0.6, health = 1.2, speed = 1.1, stun = 1.3, seed = 31, bossRoute = model.stressBossRoute}, checkpoint)
+                    candidateWon = candidateWon or worst.won
                     local bossRoutes = {model.stressBossRoute}
                     if worst.reached == #model.profile.waves then
                         for route in ipairs(model.routes) do
@@ -2178,13 +2210,16 @@ local function plannerCalculate(startAfter: boolean?)
                     worst.bossRoutesEvaluated = bossRoutes
                     return baseline, worst
                 end)
-                if not completed then if tostring(result):find("STRATEGY_SEARCH_BUDGET", 1, true) then break else error(result, 0) end end
+                if not completed then if tostring(result):find("STRATEGY_SEARCH_BUDGET", 1, true) then stopReason = "time_limit"; break else error(result, 0) end end
                 tested += 1
                 local score = StrategyModel.rank(result, stressed)
                 if not best or score > best.score then best = {model = model, policy = policy, result = result, stress = stressed, score = score} end
+                if result.won or stressed.won then stopReason = "winning_plan"; break end
             end
             assert(best, "The search did not complete a simulation.")
             best.searched = tested
+            best.strategyLimit = #candidates
+            best.stopReason = stopReason
             assert(token == planner.token, "Planning cancelled.")
             planner.plan = best
             planner.busy = false
@@ -2197,7 +2232,7 @@ local function plannerCalculate(startAfter: boolean?)
             plannerSave()
             local result = best.result
             local message = string.format("%s\nSearched %d policies. Baseline reached wave %d (%s); stress test reached %d (%s).\n%s\nThis is a simulation estimate from one recording, not a measured win rate.", if result.won or best.stress.won then "A simulated winning strategy was found." else "No simulated win found; selected the farthest-wave strategy.", tested, result.reached, if result.won then "win" else "loss", best.stress.reached, if best.stress.won then "win" else "loss", if #model.warnings > 0 then table.concat(model.warnings, "\n") else "Direct tower models available for this loadout.")
-            plannerMessage(message .. "\nPlanned purchases: " .. (if #roster > 0 then table.concat(roster, ", ") else "none affordable in this simulation") .. "\n" .. (best.policy.label or "Tower focus") .. " | " .. #model.routes .. " routes | " .. model.scheduled .. " scheduled enemies")
+            plannerMessage(message .. "\nSearch stopped: " .. (if stopReason == "winning_plan" then "first simulated win" else if stopReason == "time_limit" then "optional time limit reached" else "strategy limit reached") .. " (" .. tested .. "/" .. #candidates .. ").\nPlanned purchases: " .. (if #roster > 0 then table.concat(roster, ", ") else "none affordable in this simulation") .. "\n" .. (best.policy.label or "Tower focus") .. " | " .. #model.routes .. " routes | " .. model.scheduled .. " scheduled enemies")
             if startAfter then plannerBegin() end
         end)
         if token == planner.token then
@@ -2394,7 +2429,9 @@ local StrategyTab = Window:AddTab({Title = "Strategy", Icon = "brain"})
 StrategyTab:AddParagraph({Title = "Map and loadout strategy", Content = "Intermediate model from one recorded win. Searches your equipped loadout, map positions, saving and upgrade policies. A win ranks first; otherwise it chooses the farthest simulated wave. Complex attacks, abilities and units are approximated. Results are estimates, not a proven win rate."})
 plannerMapStatus = StrategyTab:AddParagraph({Title = "Map spawn scan", Content = "Calculate to inspect the current routes and All Paths modifier."})
 StrategyTab:AddDropdown("StrategyComposition", {Title = "Tower composition", Values = {"Automatic", "Mixed attack towers"}, Default = 1, Multi = false, Callback = function(value: string) planner.composition = value end})
-StrategyTab:AddSlider("StrategySearchSeconds", {Title = "Search budget (real seconds)", Default = 45, Min = 15, Max = 120, Rounding = 0, Callback = function(value: number) planner.seconds = value end})
+StrategyTab:AddSlider("StrategyCandidateLimit", {Title = "Strategy limit", Description = "Stops early at the first simulated win.", Default = 250, Min = 1, Max = 250, Rounding = 0, Callback = function(value: number) planner.maxStrategies = value end})
+StrategyTab:AddToggle("StrategyLimitSearchTime", {Title = "Limit search time", Default = false, Callback = function(value: boolean) planner.limitSearchTime = value end})
+StrategyTab:AddSlider("StrategySearchSeconds", {Title = "Optional time limit (real seconds)", Default = 45, Min = 15, Max = 600, Rounding = 0, Callback = function(value: number) planner.seconds = value end})
 StrategyTab:AddToggle("StrategyAutoReady", {Title = "Ready automatically after planning", Default = true, Callback = function(value: boolean) planner.autoReady = value end})
 StrategyTab:AddToggle("StrategyAbilities", {Title = "Use ready abilities", Default = true, Callback = function(value: boolean) planner.useAbilities = value end})
 StrategyTab:AddToggle("StrategySellIdle", {Title = "Sell passed towers on final wave", Description = "Only towers placed by this strategy, once remaining enemies have passed their coverage.", Default = true, Callback = function(value: boolean) planner.sellIdle = value end})
@@ -2404,7 +2441,7 @@ StrategyTab:AddButton({Title = "Start Calculated Strategy", Callback = function(
 StrategyTab:AddButton({Title = "Stop Strategy", Callback = function() plannerStop("Strategy stopped. Existing towers remain in the match."); plannerSave() end})
 plannerStatus = StrategyTab:AddParagraph({Title = "Strategy status", Content = planner.message})
 
-return {State = function() return {busy = planner.busy, running = planner.running, message = planner.message, actions = planner.actions, planned = planner.plan ~= nil, mapInfo = planner.mapInfo, roster = planner.plan and planner.plan.roster, considered = planner.plan and planner.plan.considered} end, Calculate = plannerCalculate, Stop = plannerStop}
+return {State = function() return {busy = planner.busy, running = planner.running, message = planner.message, actions = planner.actions, planned = planner.plan ~= nil, strategyLimit = planner.maxStrategies, limitSearchTime = planner.limitSearchTime, stopReason = planner.plan and planner.plan.stopReason, searched = planner.plan and planner.plan.searched, mapInfo = planner.mapInfo, roster = planner.plan and planner.plan.roster, considered = planner.plan and planner.plan.considered} end, Calculate = plannerCalculate, Stop = plannerStop}
 end)()
 
 local api = Instance.new("BindableFunction")
