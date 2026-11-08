@@ -1,0 +1,1419 @@
+local startupStage = "Waiting for Roblox to load"
+local function initializeHub()
+    local deadline = os.clock() + 30
+    while not game:IsLoaded() and os.clock() < deadline do task.wait(0.1) end
+    assert(game:IsLoaded(), "Roblox has not finished loading. Join a game and execute the script again.")
+    local players = game:GetService("Players")
+    while not players.LocalPlayer and os.clock() < deadline do task.wait(0.1) end
+    assert(players.LocalPlayer, "The local player is not ready. Execute again after joining.")
+    local playerGui = players.LocalPlayer:WaitForChild("PlayerGui", 15)
+    assert(playerGui, "PlayerGui is not ready.")
+    local previousError = playerGui:FindFirstChild("OzanHubStartupError")
+    if previousError then previousError:Destroy() end
+    local storage = game:GetService("ReplicatedStorage")
+    assert(storage:WaitForChild("Client", 20), "The game's Client folder has not replicated yet.")
+    assert(storage:WaitForChild("Shared", 20), "The game's Shared folder has not replicated yet.")
+    local function trackedRequire(module: any): any
+        startupStage = "Loading " .. module:GetFullName()
+        return require(module)
+    end
+
+local runtime: any = {}
+local cleanups: {() -> ()} = {}
+local running = true
+function runtime.onCleanup(callback: () -> ()) table.insert(cleanups, callback) end
+function runtime.stop()
+    if not running then return end
+    running = false
+    for index = #cleanups, 1, -1 do pcall(cleanups[index]) end
+    table.clear(cleanups)
+end
+function runtime.override(object: any, key: any, replacement: any)
+    local original = object[key]
+    object[key] = replacement
+    runtime.onCleanup(function()
+        if object[key] == replacement then object[key] = original end
+    end)
+end
+for _, name in ipairs({"OzanHubTDS", "OzanHubTDSLobby"}) do
+    local previous = workspace:FindFirstChild(name)
+    local api = previous and previous:FindFirstChild("API")
+    if api then pcall(function() api:Invoke("Unload") end) end
+end
+
+
+
+
+assert(game.GameId == 1176784616, "Join Tower Defense Simulator first.")
+local function attachReopenButton(Fluent: any, Window: any)
+    local inputService = game:GetService("UserInputService")
+    local screen = Instance.new("ScreenGui")
+    screen.Name = "OzanHubReopen"
+    screen.ResetOnSpawn = false
+    screen.DisplayOrder = 1000000
+    screen.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    local button = Instance.new("TextButton")
+    button.Name = "Ozan"
+    button.Size = UDim2.fromOffset(74, 46)
+    button.Position = UDim2.new(1, -90, 0, 74)
+    button.BackgroundColor3 = Color3.fromRGB(92, 66, 145)
+    button.TextColor3 = Color3.new(1, 1, 1)
+    button.Text = "Ozan"
+    button.Font = Enum.Font.GothamBold
+    button.TextSize = 17
+    button.Active = true
+    button.Parent = screen
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 14)
+    corner.Parent = button
+    local border = Instance.new("UIStroke")
+    border.Color = Color3.fromRGB(184, 152, 238)
+    border.Thickness = 1
+    border.Parent = button
+    screen.Parent = Fluent.GUI.Parent or game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui")
+    local connections: {RBXScriptConnection} = {}
+    local disposed = false
+    local pointer: InputObject? = nil
+    local startPoint = Vector2.zero
+    local startPosition = Vector2.zero
+    local moved = false
+    local suppressUntil = 0
+    local function link(signal: RBXScriptSignal, callback: any)
+        table.insert(connections, signal:Connect(callback))
+    end
+    local function dispose()
+        if disposed then return end
+        disposed = true
+        for _, connection in ipairs(connections) do connection:Disconnect() end
+        table.clear(connections)
+        screen:Destroy()
+    end
+    link(button.InputBegan, function(input: InputObject)
+        if input.UserInputType ~= Enum.UserInputType.Touch and input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
+        if pointer then return end
+        pointer = input
+        startPoint = Vector2.new(input.Position.X, input.Position.Y)
+        local inset = game:GetService("GuiService"):GetGuiInset()
+        startPosition = button.AbsolutePosition - inset
+        moved = false
+    end)
+    link(inputService.InputChanged, function(input: InputObject)
+        if not pointer then return end
+        local tracked = input == pointer or (pointer.UserInputType == Enum.UserInputType.MouseButton1 and input.UserInputType == Enum.UserInputType.MouseMovement)
+        if not tracked then return end
+        local delta = Vector2.new(input.Position.X, input.Position.Y) - startPoint
+        if delta.Magnitude < 8 and not moved then return end
+        moved = true
+        local camera = workspace.CurrentCamera
+        local view = if camera then camera.ViewportSize else Vector2.new(800, 600)
+        local position = startPosition + delta
+        button.Position = UDim2.fromOffset(math.clamp(position.X, 8, math.max(8, view.X - 82)), math.clamp(position.Y, 8, math.max(8, view.Y - 92)))
+    end)
+    link(inputService.InputEnded, function(input: InputObject)
+        if input ~= pointer then return end
+        pointer = nil
+        if moved then suppressUntil = os.clock() + 0.25 end
+    end)
+    link(button.Activated, function()
+        if disposed or moved or os.clock() < suppressUntil then return end
+        if Fluent.Unloaded then dispose(); return end
+        Window:Minimize()
+    end)
+    local camera = workspace.CurrentCamera
+    if camera then
+        link(camera:GetPropertyChangedSignal("ViewportSize"), function()
+            local inset = game:GetService("GuiService"):GetGuiInset()
+            local position = button.AbsolutePosition - inset
+            local view = camera.ViewportSize
+            button.Position = UDim2.fromOffset(math.clamp(position.X, 8, math.max(8, view.X - 82)), math.clamp(position.Y, 8, math.max(8, view.Y - 92)))
+        end)
+    end
+    link(Fluent.GUI.Destroying, dispose)
+    runtime.onCleanup(dispose)
+end
+
+if game.PlaceId == 3260590327 then
+    return (function()
+assert(game.GameId == 1176784616 and game.PlaceId == 3260590327, "Join the Tower Defense Simulator lobby first.")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local loadModule: any = trackedRequire
+local Cache: any = loadModule(ReplicatedStorage.Client.Modules.Cache)
+local Network: any = loadModule(ReplicatedStorage.Shared.Modules.Network)
+local NewNetwork: any = loadModule(ReplicatedStorage.Shared.Modules.NewNetwork)
+local PlayerStats: any = loadModule(ReplicatedStorage.Client.Interfaces.Stores.Shared.PlayerStatsStore)
+local PlaytimeData: any = loadModule(ReplicatedStorage.Shared.Modules.PlaytimeRewardData)
+local SeasonData: any = loadModule(ReplicatedStorage.Shared.Data.Seasons)
+local Inventory = Network.Channel("Inventory")
+local Gifts = Network.Channel("Gifts")
+local Seasons = Network.Channel("Seasons")
+local Spin = NewNetwork.Channel("DailySpin")
+local Playtime = NewNetwork.Channel("PlaytimeRewards")
+startupStage = "Downloading Fluent UI"
+local Fluent: any = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
+startupStage = "Creating Ozan Hub"
+local alive = true
+local settings: {[string]: boolean} = {AutoSpin = false, AutoGifts = false, AutoCrates = false, AutoPlaytime = false}
+local errors: {[string]: string} = {}
+local counts: {[string]: number} = {AutoSpin = 0, AutoGifts = 0, AutoCrates = 0, AutoPlaytime = 0}
+local epochs: {[string]: number} = {AutoSpin = 0, AutoGifts = 0, AutoCrates = 0, AutoPlaytime = 0}
+local giftDone: {[string]: boolean} = {}
+local claimRetry: {[string]: number} = {}
+local cratePending: {[string]: any} = {}
+local folder = Instance.new("Folder")
+folder.Name = "OzanHubTDSLobby"
+folder.Parent = workspace
+local function ready(id: string, epoch: number): boolean
+    return alive and not Fluent.Unloaded and settings[id] and epochs[id] == epoch
+end
+local function cached(name: string): any
+    local object = Cache(name)
+    local value = object:GetValue()
+    if value ~= nil then return value end
+    local success, result = object:Download(false):await()
+    if not success then error(tostring(result)) end
+    return result
+end
+local function spinStep(epoch: number)
+    if (tonumber(PlayerStats.getSpinTickets()) or 0) < 1 or not ready("AutoSpin", epoch) then return end
+    local success, result = Spin:invokeServer("RedeemSpin")
+    if not success then error(tostring(result or "Spin was not accepted.")) end
+    counts.AutoSpin += 1
+end
+local function giftStep(epoch: number)
+    local gifts = Gifts:InvokeServer("Request")
+    if type(gifts) ~= "table" then return end
+    for _, gift in pairs(gifts) do
+        if not ready("AutoGifts", epoch) then return end
+        if gift.id ~= nil and not giftDone["gift:" .. tostring(gift.id)] then
+            local success, reason = Gifts:InvokeServer("Claim", gift.id)
+            if not success then error(tostring(reason or "Gift claim was not accepted.")) end
+            giftDone["gift:" .. tostring(gift.id)] = true
+            counts.AutoGifts += 1
+            task.wait(0.5)
+        end
+    end
+    if not ready("AutoGifts", epoch) then return end
+    local rewards = Seasons:InvokeServer("GetUnclaimed")
+    if type(rewards) ~= "table" then return end
+    for _, reward in pairs(rewards) do
+        if not ready("AutoGifts", epoch) then return end
+        local definition = SeasonData.Seasons[reward.season]
+        local visible = definition and not (definition.hidePostSeasonUnclaimedRewards and SeasonData.InactiveSeasons[reward.season])
+        local key = "season:" .. tostring(reward.season) .. ":" .. tostring(reward.tier)
+        if visible and not giftDone[key] then
+            local success, reason = Seasons:InvokeServer("Claim", reward.season, reward.tier)
+            if not success then error(tostring(reason or "Season reward was not accepted.")) end
+            giftDone[key] = true
+            counts.AutoGifts += 1
+            task.wait(0.5)
+        end
+    end
+end
+local function crateStep(epoch: number)
+    local crates = cached("Inventory.Crates")
+    if type(crates) ~= "table" or not ready("AutoCrates", epoch) then return end
+    local names = {}
+    for name, amount in pairs(crates) do
+        if type(name) == "string" and type(amount) == "number" and amount > 0 then table.insert(names, name) end
+    end
+    table.sort(names)
+    for _, name in ipairs(names) do
+        if not ready("AutoCrates", epoch) then return end
+        local pending = cratePending[name]
+        local amount = crates[name]
+        if pending and amount == pending.amount and os.clock() < pending.untilTime then continue end
+        local result, reason = Inventory:InvokeServer("Open", "Crate", name)
+        if not result or reason then error(tostring(reason or "Crate opening was not accepted.")) end
+        counts.AutoCrates += 1
+        cratePending[name] = {amount = amount, untilTime = os.clock() + 15}
+        return
+    end
+end
+local function playtimeStep(epoch: number)
+    local data = cached("PlaytimeRewards")
+    if type(data) ~= "table" then return end
+    local played = tonumber(data.TimePlayedSeconds) or 0
+    local claimed = data.Claimed or {}
+    for index, reward in ipairs(PlaytimeData) do
+        if not ready("AutoPlaytime", epoch) then return end
+        local key = tostring(data.CycleStartTime or 0) .. ":" .. index
+        if played >= reward.seconds and not claimed[index] and (claimRetry[key] or 0) <= os.clock() then
+            claimRetry[key] = os.clock() + 15
+            local success, reason = Playtime:invokeServer("ClaimReward", index)
+            if success == false then error(tostring(reason or "Playtime reward was not accepted.")) end
+            counts.AutoPlaytime += 1
+            task.wait(0.5)
+        end
+    end
+end
+local function cleanup()
+    if not alive then return end
+    alive = false
+    for id in pairs(settings) do settings[id] = false; epochs[id] += 1 end
+    folder:Destroy()
+    if not Fluent.Unloaded then Fluent:Destroy() end
+end
+runtime.onCleanup(cleanup)
+local Window = Fluent:CreateWindow({
+    Title = "Ozan Hub",
+    SubTitle = "Tower Defense Simulator · Lobby",
+    TabWidth = 130,
+    Size = UDim2.fromOffset(560, 460),
+    Acrylic = false,
+    Theme = "Amethyst",
+    MinimizeKey = Enum.KeyCode.RightShift,
+})
+attachReopenButton(Fluent, Window)
+local Main = Window:AddTab({Title = "Main", Icon = "home"})
+local definitions = {
+    {id = "AutoSpin", title = "Auto Spin Fortune Wheel", description = "Use available spin tickets automatically.", interval = 10, callback = spinStep},
+    {id = "AutoGifts", title = "Auto Redeem Gifts", description = "Claim giftbox gifts and available season rewards.", interval = 20, callback = giftStep},
+    {id = "AutoCrates", title = "Auto Open Inventory Crates", description = "Open crates already owned in your inventory, one at a time.", interval = 3, callback = crateStep},
+    {id = "AutoPlaytime", title = "Auto Redeem Playtime Rewards", description = "Claim rewards once the required playtime has been reached.", interval = 5, callback = playtimeStep},
+}
+for _, definition in ipairs(definitions) do
+    local id = definition.id
+    Main:AddToggle(id, {
+        Title = definition.title,
+        Description = definition.description,
+        Default = false,
+        Callback = function(value: boolean)
+            settings[id] = value
+            epochs[id] += 1
+        end,
+    })
+    task.spawn(function()
+        while alive and not Fluent.Unloaded do
+            if settings[id] then
+                local ok, problem = pcall(definition.callback, epochs[id])
+                if not ok then errors[id] = tostring(problem) else errors[id] = "" end
+                local deadline = os.clock() + (if ok then definition.interval else 20)
+                while alive and not Fluent.Unloaded and settings[id] and os.clock() < deadline do task.wait(0.25) end
+            else
+                task.wait(0.25)
+            end
+        end
+    end)
+end
+local api = Instance.new("BindableFunction")
+api.Name = "API"
+api.Parent = folder
+api.OnInvoke = function(action: string)
+    if action == "Unload" then
+        if runtime.stop then runtime.stop() else cleanup() end
+        return true
+    end
+    return {settings = table.clone(settings), errors = table.clone(errors), counts = table.clone(counts), loaded = alive}
+end
+Window:SelectTab(1)
+return {loaded = true, lobby = true}
+
+
+    end)()
+else
+    return (function()
+assert(game.GameId == 1176784616, "Ozan Hub: join Tower Defense Simulator first.")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local loadModule: any = trackedRequire
+local shared: any = loadModule(ReplicatedStorage.Shared.Modules.SharedGameFunctions)
+local placement: any = loadModule(ReplicatedStorage.Client.Controllers.Game.NewPlacementController)
+startupStage = "Downloading Fluent UI"
+local Fluent: any = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
+startupStage = "Creating Ozan Hub"
+local enabled = false
+local alive = true
+local folder = Instance.new("Folder")
+folder.Name = "OzanHubTDS"
+folder.Parent = workspace
+local baseCheck = shared.CheckTowerCollisions
+assert(type(baseCheck) == "function", "Placement API changed; stacking was not installed.")
+
+local localPlayer = game:GetService("Players").LocalPlayer
+local TowerReplicator: any = loadModule(ReplicatedStorage.Client.Modules.Replicators.TowerReplicator)
+local PlayerReplicator: any = loadModule(ReplicatedStorage.Client.Modules.Replicators.PlayerReplicator)
+local GameRules: any = loadModule(ReplicatedStorage.Shared.Modules.GameRules)
+local GameState: any = loadModule(ReplicatedStorage.Shared.Modules.GameState)
+local GameEnum: any = loadModule(ReplicatedStorage.Shared.Modules.Enum)
+local Troops: any = loadModule(ReplicatedStorage.Shared.Modules.Network).Channel("Troops")
+local placementConstants: any = loadModule(ReplicatedStorage.Shared.Modules.SharedGameConstants)
+local wallPlacement = false
+local wallOffsets = {-4.95, -4.99, -4.9, -4.75, -4, -2}
+local lastWallOffset: number? = nil
+local function wallObstacles(position: Vector3, extra: any, ignored: any): any
+    if enabled then return extra end
+    local obstacles = if type(extra) == "table" then table.clone(extra) else {}
+    local quarantine = GameState.IsModifierEnabled("Quarantine")
+    for _, tower in pairs(TowerReplicator.getTowers()) do
+        if tower == ignored or tower.Model == ignored or not tower.Asset or not tower.PrimaryPart or not tower.Model then continue end
+        local attachment = tower.PrimaryPart:FindFirstChild("HeightOffset")
+        local point: Vector3
+        if attachment and attachment:IsA("Attachment") then
+            point = attachment.WorldPosition
+        else
+            local pivot, size = tower.Model:GetBoundingBox()
+            point = pivot.Position - Vector3.new(0, size.Y * 0.5, 0)
+        end
+        if math.abs(point.Y - position.Y) <= placementConstants.BOUNDARY_HEIGHT then
+            local boundary = (tower.Replicator and tower.Replicator:Get("EventBoundarySize")) or tower.Asset.Properties.BoundarySize or placementConstants.DEFAULT_BOUNDARY_SIZE
+            if quarantine then boundary += 10 end
+            table.insert(obstacles, {point, boundary})
+        end
+    end
+    return obstacles
+end
+local function placementResult(hit: RaycastResult, height: number): any
+    return {
+        Position = hit.Position + Vector3.new(0, height, 0),
+        OzanSurfacePosition = hit.Position,
+        Instance = hit.Instance,
+        Normal = hit.Normal,
+        Material = hit.Material,
+        Distance = hit.Distance,
+    }
+end
+local function checkHubPlacement(name: any, position: any, team: any, extra: any, ignored: any, radius: any)
+    if not alive or Fluent.Unloaded or typeof(position) ~= "Vector3" or (not enabled and not wallPlacement) then
+        return baseCheck(name, position, team, extra, ignored, radius)
+    end
+    local height = if enabled then 10 else 0
+    local valid, hit = baseCheck(name, position + Vector3.new(0, height, 0), team, extra, ignored, radius)
+    local sameSurface = valid and typeof(hit) == "RaycastResult" and math.abs(hit.Position.Y - position.Y) <= 0.5
+    if valid and typeof(hit) == "RaycastResult" and (not wallPlacement or sameSurface) then
+        if height == 0 then return valid, hit end
+        return true, placementResult(hit, height)
+    end
+    if not wallPlacement then return valid, hit end
+    local obstacles = wallObstacles(position, extra, ignored)
+    local function tryOffset(candidate: number): any
+        local accepted, surface = baseCheck(name, position + Vector3.new(0, candidate, 0), team, obstacles, ignored, radius)
+        if accepted and typeof(surface) == "RaycastResult" and math.abs(surface.Position.Y - position.Y) <= 0.5 then
+            lastWallOffset = candidate
+            return placementResult(surface, candidate)
+        end
+        return nil
+    end
+    if lastWallOffset then
+        local result = tryOffset(lastWallOffset)
+        if result then return true, result end
+    end
+    for _, candidate in ipairs(wallOffsets) do
+        if candidate == lastWallOffset then continue end
+        local result = tryOffset(candidate)
+        if result then return true, result end
+    end
+    if valid and not sameSurface then return false end
+    return valid, hit
+end
+runtime.override(shared, "CheckTowerCollisions", function(name: any, position: any, team: any, extra: any, ignored: any, radius: any)
+    if not placement.Active then return baseCheck(name, position, team, extra, ignored, radius) end
+    return checkHubPlacement(name, position, team, extra, ignored, radius)
+end)
+
+local advisorAsset: any = loadModule(ReplicatedStorage.Shared.Modules.Asset)
+local advisorCache: any = loadModule(ReplicatedStorage.Client.Modules.Cache)
+local advisorRangeRules: any = loadModule(ReplicatedStorage.Shared.Modules.TowerRangeRules)
+local advisorSelected: string? = nil
+local advisorObjective = "Most path coverage"
+local advisorTarget = "Fully upgraded"
+local advisorPlanning = "Balanced progression"
+local advisorBranch = 1
+local advisorPlayersService = game:GetService("Players")
+local advisorPlayerId = localPlayer.UserId
+local advisorPlayerLabels: {[string]: number} = {}
+local advisorFriendGolden = false
+local advisorResult: any = nil
+local advisorRun = 0
+local advisorBusy = false
+local advisorControls: any = {}
+local advisorMarker: Model? = nil
+local function advisorMessage(message: string)
+    if advisorControls.Status and type(advisorControls.Status.SetDesc) == "function" then advisorControls.Status:SetDesc(message) end
+end
+local function advisorAction(callback: any)
+    if not alive or Fluent.Unloaded then return end
+    local ok, problem = pcall(callback)
+    if not ok then Fluent:Notify({Title = "Placement advisor", Content = tostring(problem):gsub("^.-:%d+: ", ""), Duration = 6}) end
+end
+local function clearAdvisorMarker()
+    if advisorMarker then advisorMarker:Destroy() end
+    advisorMarker = nil
+end
+local function cancelAdvisor()
+    advisorRun += 1
+    advisorBusy = false
+    advisorResult = nil
+    clearAdvisorMarker()
+end
+local function advisorSource(userId: number?): any
+    local player = advisorPlayersService:GetPlayerByUserId(userId or advisorPlayerId)
+    return player and PlayerReplicator.GetEntityFromPlayer(player) or nil
+end
+local function advisorLoadout(userId: number?): {string}
+    local player = advisorSource(userId)
+    if not player then return {} end
+    local field = if GameState.GameMode == "PVP" then "EquippedPVPTowers" else "EquippedTowers"
+    local equipped = player.Replicator:Get(field) or player[field] or {}
+    local values = {}
+    for _, name in ipairs(equipped) do if type(name) == "string" then table.insert(values, name) end end
+    return values
+end
+local function refreshAdvisorLoadout()
+    local selected = advisorSelected
+    local values = {"Select a tower"}
+    for _, name in ipairs(advisorLoadout()) do table.insert(values, name) end
+    if advisorControls.Tower then
+        advisorControls.Tower:SetValues(values)
+        advisorControls.Tower:SetValue(if selected and table.find(values, selected) then selected else values[1])
+    end
+    if advisorControls.Loadout then
+        local source = advisorPlayersService:GetPlayerByUserId(advisorPlayerId)
+        local names = advisorLoadout()
+        advisorControls.Loadout:SetDesc((if source then source.DisplayName .. " (@" .. source.Name .. ")" else "Player unavailable") .. "\n" .. (if #names > 0 then table.concat(names, ", ") else "Loadout has not replicated yet. Press Refresh Loadout shortly."))
+    end
+end
+local function advisorVariant(name: string, download: boolean): (any, any, string)
+    local asset = advisorAsset("Troops", name)
+    assert(asset and asset.Stats, "That tower's stats are not available yet.")
+    local golden = advisorFriendGolden
+    if advisorPlayerId == localPlayer.UserId then
+        local inventoryCache = advisorCache("Inventory.Troops")
+        local inventory = inventoryCache:GetValue()
+        if not inventory and download then
+            local ok, value = inventoryCache:Download(false):await()
+            if ok then inventory = value end
+        end
+        local entry = inventory and inventory[name]
+        golden = entry and entry.GoldenPerks == true
+    end
+    local variant = if golden and asset.Stats.Golden and GameRules.Get("GoldenPerks") ~= false then "Golden" else "Default"
+    return asset, asset.Stats[variant], if variant == "Golden" then "Golden" else "Standard"
+end
+local function refreshAdvisorLevels()
+    local values = {"Fully upgraded", "Base level"}
+    if advisorSelected then
+        local _, stats = advisorVariant(advisorSelected, false)
+        for level = 1, #(stats and stats.Upgrades or {}) do table.insert(values, "Level " .. level) end
+    end
+    if advisorControls.Target then
+        advisorControls.Target:SetValues(values)
+        advisorControls.Target:SetValue(if table.find(values, advisorTarget) then advisorTarget else values[1])
+    end
+end
+local function refreshAdvisorPlayers(excludeId: number?)
+    local values = {"My loadout"}
+    local labels = {["My loadout"] = localPlayer.UserId}
+    local selected = "My loadout"
+    local players = advisorPlayersService:GetPlayers()
+    table.sort(players, function(a, b) return a.Name:lower() < b.Name:lower() end)
+    for _, player in ipairs(players) do
+        if player == localPlayer or player.UserId == excludeId then continue end
+        local label = player.DisplayName .. " (@" .. player.Name .. ")"
+        table.insert(values, label)
+        labels[label] = player.UserId
+        if player.UserId == advisorPlayerId then selected = label end
+    end
+    advisorPlayerLabels = labels
+    if advisorControls.Player then
+        advisorControls.Player:SetValues(values)
+        advisorControls.Player:SetValue(selected)
+    end
+end
+local function advisorDefinition(name: string): any
+    local asset, stats, variant = advisorVariant(name, true)
+    local defaults = stats and stats.Defaults
+    assert(defaults, "That tower's base stats are missing.")
+    local upgrades = stats.Upgrades or {}
+    local target = if advisorTarget == "Fully upgraded" then #upgrades else if advisorTarget == "Base level" then 0 else tonumber(advisorTarget:match("%d+")) or 0
+    target = math.clamp(target, 0, #upgrades)
+    local function adjusted(raw: number): number
+        return advisorRangeRules.applyGlobalMultipliers(raw, GameState.IsModifierEnabled("Fog"), GameRules.Get("TowerRangeMultiplier") or 1, advisorRangeRules.isBoostImmune(asset))
+    end
+    local rawRange = tonumber(defaults.Range) or 0
+    local deadzone = math.max(0, tonumber(defaults.Attributes and defaults.Attributes.Deadzone) or 0)
+    local baseRange = adjusted(rawRange)
+    local baseDeadzone = deadzone
+    local stages = {{range = baseRange, deadzone = deadzone}}
+    local branched = false
+    for level = 1, target do
+        local upgrade = upgrades[level]
+        if type(upgrade[1]) == "table" then
+            branched = true
+            upgrade = upgrade[advisorBranch]
+            assert(type(upgrade) == "table", "This tower does not have that upgrade branch. Choose another branch.")
+        end
+        local upgradeRange = tonumber(upgrade.Stats and upgrade.Stats.Range)
+        local upgradeDeadzone = tonumber(upgrade.Stats and upgrade.Stats.Attributes and upgrade.Stats.Attributes.Deadzone)
+        if upgradeRange then rawRange = upgradeRange end
+        if upgradeDeadzone then deadzone = math.max(0, upgradeDeadzone) end
+        table.insert(stages, {range = adjusted(rawRange), deadzone = deadzone})
+    end
+    local range = stages[#stages].range
+    assert(range > 0, "This tower has no attack or support radius at the selected level.")
+    return {asset = asset, variant = variant, range = range, deadzone = deadzone, baseRange = baseRange, baseDeadzone = baseDeadzone, stages = stages, targetLevel = target, branch = if branched then advisorBranch else nil, planning = advisorPlanning, support = (tonumber(defaults.Damage) or 0) <= 0, price = tonumber(defaults.Price) or 0}
+end
+local function advisorRoutes(team: any): {any}
+    local allPaths = GameState.Paths
+    assert(type(allPaths) == "table", "Wait for the map's enemy paths to finish loading.")
+    local paths = allPaths[team] or allPaths[GameEnum.Team.Player]
+    assert(type(paths) == "table", "Wait for the map's enemy paths to finish loading.")
+    local routes = {}
+    local keys = {}
+    for key, route in pairs(paths) do if tonumber(key) and type(route) == "table" and route.Points then table.insert(keys, key) end end
+    table.sort(keys, function(a, b) return tonumber(a) < tonumber(b) end)
+    for _, key in ipairs(keys) do
+        local route = paths[key]
+        local segments = {}
+        local travelled = 0
+        for index = 2, #route.Points do
+            local a, b = route.Points[index - 1], route.Points[index]
+            if typeof(a) == "Vector3" and typeof(b) == "Vector3" then
+                local d = b - a
+                local length = d.Magnitude
+                if length > 0.001 then table.insert(segments, {a = a, d = d, square = d:Dot(d), length = length, start = travelled}); travelled += length end
+            end
+        end
+        if travelled > 0 then table.insert(routes, {path = route, segments = segments, length = travelled}) end
+        if #routes >= 8 then break end
+    end
+    assert(#routes > 0, "No usable enemy paths were found.")
+    return routes
+end
+local function advisorAllies(team: any): {any}
+    local allies = {}
+    for _, tower in pairs(TowerReplicator.getTowers()) do
+        if tostring(tower.Team) == tostring(team) and tower.Position and (tonumber(tower.Damage) or 0) > 0 then
+            table.insert(allies, {position = tower.Position, value = 1 + math.sqrt(math.max(0, (tonumber(tower.Damage) or 0) / math.max(0.05, tonumber(tower.Cooldown) or 1))) * 0.05})
+        end
+    end
+    return allies
+end
+local function advisorSegmentInterval(square: number, b: number, distanceSquare: number, radius: number): (number, number)
+    if radius <= 0 then return 0, 0 end
+    local discriminant = b * b - 4 * square * (distanceSquare - radius * radius)
+    if discriminant <= 0 then return 0, 0 end
+    local root = math.sqrt(discriminant)
+    return math.clamp((-b - root) / (2 * square), 0, 1), math.clamp((-b + root) / (2 * square), 0, 1)
+end
+local function advisorScoreAtRange(point: Vector3, range: number, deadzone: number, definition: any, routes: {any}, allies: {any}): any
+    local total, weakest, early = 0, math.huge, 0
+    for _, route in ipairs(routes) do
+        local covered = 0
+        for _, segment in ipairs(route.segments) do
+            local f = segment.a - point
+            local b = 2 * f:Dot(segment.d)
+            local distanceSquare = f:Dot(f)
+            local enter, leave = advisorSegmentInterval(segment.square, b, distanceSquare, range)
+            if leave > enter then
+                local amount = (leave - enter) * segment.length
+                local weighted = amount * (1 + 0.35 * (1 - (segment.start + (enter + leave) * 0.5 * segment.length) / route.length))
+                if deadzone > 0 then
+                    local innerEnter, innerLeave = advisorSegmentInterval(segment.square, b, distanceSquare, math.min(range, deadzone))
+                    innerEnter = math.max(enter, innerEnter)
+                    innerLeave = math.min(leave, innerLeave)
+                    if innerLeave > innerEnter then
+                        local blocked = (innerLeave - innerEnter) * segment.length
+                        amount -= blocked
+                        weighted -= blocked * (1 + 0.35 * (1 - (segment.start + (innerEnter + innerLeave) * 0.5 * segment.length) / route.length))
+                    end
+                end
+                covered += math.max(0, amount)
+                early += math.max(0, weighted)
+            end
+        end
+        total += covered
+        weakest = math.min(weakest, covered)
+    end
+    local coverage = total / #routes
+    local score = coverage
+    if advisorObjective == "Cover every route" then score = weakest + coverage * 0.1 end
+    if advisorObjective == "Earlier engagement" then score = early / #routes end
+    local count, supportScore = 0, 0
+    if definition.support and #allies > 0 then
+        for _, ally in ipairs(allies) do
+            local distance = (ally.position - point).Magnitude
+            if distance <= range and distance >= deadzone then count += 1; supportScore += ally.value end
+        end
+        score = supportScore * 10000 + score * 0.001
+    end
+    return {score = score, coverage = coverage, weakest = weakest, allies = count}
+end
+local function advisorScore(point: Vector3, definition: any, routes: {any}, allies: {any}): any
+    local cached = {}
+    local function score(stage: any): any
+        local key = tostring(stage.range) .. ":" .. tostring(stage.deadzone)
+        local scored = cached[key]
+        if not scored then
+            scored = advisorScoreAtRange(point, stage.range, stage.deadzone, definition, routes, allies)
+            cached[key] = scored
+        end
+        return scored
+    end
+    local result = score(definition.stages[#definition.stages])
+    local base = score(definition.stages[1])
+    result.baseCoverage = base.coverage
+    result.baseAllies = base.allies
+    if definition.planning == "Balanced progression" then
+        local total = 0
+        for _, stage in ipairs(definition.stages) do
+            local scored = score(stage)
+            total += scored.score
+        end
+        result.score = total / #definition.stages
+    end
+    return result
+end
+local function advisorSurfaces(class: any): any
+    local roots = {}
+    if class ~= GameEnum.TowerType.Cliff then
+        local ground = workspace:FindFirstChild("Ground")
+        if ground then table.insert(roots, ground) end
+    end
+    if class == GameEnum.TowerType.Cliff or class == GameEnum.TowerType.Both then
+        local cliff = workspace:FindFirstChild("Cliff")
+        if cliff then table.insert(roots, cliff) end
+    end
+    assert(#roots > 0, "The map's placement surfaces are not ready.")
+    local parts = {}
+    local low, high = math.huge, -math.huge
+    for _, root in ipairs(roots) do
+        for _, part in ipairs(root:GetDescendants()) do
+            if part:IsA("BasePart") and part.CanQuery then
+                table.insert(parts, part)
+                local cf, size = part.CFrame, part.Size
+                local halfY = (math.abs(cf.RightVector.Y) * size.X + math.abs(cf.UpVector.Y) * size.Y + math.abs(cf.LookVector.Y) * size.Z) / 2
+                low = math.min(low, part.Position.Y - halfY)
+                high = math.max(high, part.Position.Y + halfY)
+            end
+        end
+    end
+    assert(#parts > 0, "No placement surfaces are available for this tower type.")
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Include
+    params.FilterDescendantsInstances = roots
+    return {params = params, parts = parts, top = high + 20, depth = high - low + 60}
+end
+local function advisorProject(x: number, z: number, surfaces: any): Vector3?
+    local hit = workspace:Raycast(Vector3.new(x, surfaces.top, z), Vector3.new(0, -surfaces.depth, 0), surfaces.params)
+    return hit and hit.Position or nil
+end
+local function validateAdvisorPoint(name: string, point: Vector3, team: any): any
+    local valid, hit = checkHubPlacement(name, point, team, nil, nil, nil)
+    if not valid or not hit then return nil end
+    local surface = if typeof(hit) == "RaycastResult" then hit.Position else hit.OzanSurfacePosition or hit.Position
+    if typeof(surface) ~= "Vector3" or (surface - point).Magnitude > 0.75 then return nil end
+    return {request = hit.Position, point = surface}
+end
+local function showAdvisorMarker(result: any)
+    clearAdvisorMarker()
+    local model = Instance.new("Model")
+    model.Name = "OzanRecommendedPosition"
+    local dot = Instance.new("Part")
+    dot.Name = "RecommendedPosition"
+    dot.Shape = Enum.PartType.Ball
+    dot.Size = Vector3.new(1.3, 1.3, 1.3)
+    dot.CFrame = CFrame.new(result.point + Vector3.new(0, 1, 0))
+    dot.Color = Color3.fromRGB(92, 235, 167)
+    dot.Material = Enum.Material.Neon
+    dot.Anchored = true
+    dot.CanCollide = false
+    dot.CanTouch = false
+    dot.CanQuery = false
+    dot.Parent = model
+    local ring = Instance.new("Part")
+    ring.Name = "EstimatedRange"
+    ring.Shape = Enum.PartType.Cylinder
+    ring.Size = Vector3.new(0.08, result.range * 2, result.range * 2)
+    ring.CFrame = CFrame.new(result.point + Vector3.new(0, 0.12, 0)) * CFrame.Angles(0, 0, math.rad(90))
+    ring.Color = dot.Color
+    ring.Material = Enum.Material.Neon
+    ring.Transparency = 0.9
+    ring.Anchored = true
+    ring.CanCollide = false
+    ring.CanTouch = false
+    ring.CanQuery = false
+    ring.Parent = model
+    if result.deadzone > 0 then
+        local inner = ring:Clone()
+        inner.Name = "CannotAttackInside"
+        inner.Size = Vector3.new(0.08, result.deadzone * 2, result.deadzone * 2)
+        inner.CFrame = ring.CFrame + Vector3.new(0, 0.08, 0)
+        inner.Color = Color3.fromRGB(245, 90, 90)
+        inner.Transparency = 0.65
+        inner.Parent = model
+    end
+    if math.abs(result.baseRange - result.range) > 0.01 and result.baseRange > 0 then
+        local baseRing = ring:Clone()
+        baseRing.Name = "BaseLevelRange"
+        baseRing.Size = Vector3.new(0.08, result.baseRange * 2, result.baseRange * 2)
+        baseRing.CFrame = ring.CFrame + Vector3.new(0, 0.04, 0)
+        baseRing.Color = Color3.fromRGB(90, 170, 255)
+        baseRing.Parent = model
+    end
+    local label = Instance.new("BillboardGui")
+    label.Size = UDim2.fromOffset(260, 64)
+    label.StudsOffset = Vector3.new(0, 2.5, 0)
+    label.AlwaysOnTop = true
+    label.Adornee = dot
+    label.Parent = dot
+    local text = Instance.new("TextLabel")
+    text.Size = UDim2.fromScale(1, 1)
+    text.BackgroundTransparency = 0.25
+    text.BackgroundColor3 = Color3.fromRGB(25, 30, 37)
+    text.TextColor3 = Color3.new(1, 1, 1)
+    text.TextSize = 15
+    text.Font = Enum.Font.GothamBold
+    text.TextWrapped = true
+    text.Text = result.playerName .. ": " .. result.name .. "\nPlanned level " .. result.targetLevel
+    text.Parent = label
+    model.Parent = workspace.CurrentCamera
+    advisorMarker = model
+end
+local function findAdvisorPosition()
+    local name = advisorSelected
+    assert(name and table.find(advisorLoadout(), name), "Select a tower from the chosen player's loadout first.")
+    cancelAdvisor()
+    local token = advisorRun
+    local sourceId = advisorPlayerId
+    advisorBusy = true
+    advisorMessage("Searching placement surfaces...")
+    task.spawn(function()
+        local ok, problem = pcall(function()
+            local map = workspace:FindFirstChild("Map")
+            local player = advisorSource(sourceId)
+            assert(map and player, "The match is not ready yet.")
+            local team = player.Team
+            local definition = advisorDefinition(name)
+            local routes = advisorRoutes(team)
+            local allies = advisorAllies(team)
+            local surfaces = advisorSurfaces(definition.asset.Properties.Class)
+            local searchRange = 0
+            for _, stage in ipairs(definition.stages) do searchRange = math.max(searchRange, stage.range) end
+            local function current(): boolean
+                return alive and not Fluent.Unloaded and advisorRun == token and advisorPlayerId == sourceId and advisorSource(sourceId) == player and tostring(player.Team) == tostring(team) and map.Parent == workspace and workspace:FindFirstChild("Map") == map and advisorSelected == name and table.find(advisorLoadout(sourceId), name) ~= nil and not GameState.GameOver
+            end
+            local function checkpoint()
+                assert(current(), "Search cancelled because the tower or match changed.")
+                task.wait()
+                assert(current(), "Search cancelled because the tower or match changed.")
+            end
+            local points, seen = {}, {}
+            local function add(x: number, z: number)
+                if #points >= 5000 then return end
+                local key = math.round(x * 2) .. ":" .. math.round(z * 2)
+                if seen[key] then return end
+                seen[key] = true
+                local point = advisorProject(x, z, surfaces)
+                if point then table.insert(points, point) end
+            end
+            for index, part in ipairs(surfaces.parts) do
+                if #points >= 1400 then break end
+                for _, offset in ipairs({Vector3.zero, Vector3.new(0.35, 0, 0.35), Vector3.new(-0.35, 0, 0.35), Vector3.new(0.35, 0, -0.35), Vector3.new(-0.35, 0, -0.35)}) do
+                    local point = part.CFrame:PointToWorldSpace(Vector3.new(offset.X * part.Size.X, 0, offset.Z * part.Size.Z))
+                    add(point.X, point.Z)
+                end
+                if index % 20 == 0 then checkpoint() end
+            end
+            for _, route in ipairs(routes) do
+                local samples = math.max(12, math.min(math.floor(90 / #routes), math.ceil(route.length / math.max(5, searchRange * 0.35))))
+                for index = 0, samples do
+                    local point = route.path:GetScalar(route.length * index / samples)
+                    add(point.X, point.Z)
+                    for _, scale in ipairs({0.4, 0.75, 0.97}) do
+                        for angle = 0, 11 do
+                            local theta = angle * math.pi / 6
+                            add(point.X + math.cos(theta) * searchRange * scale, point.Z + math.sin(theta) * searchRange * scale)
+                        end
+                    end
+                    if index % 3 == 0 then checkpoint() end
+                end
+            end
+            local ranked = {}
+            for index, point in ipairs(points) do
+                local scored = advisorScore(point, definition, routes, allies)
+                if scored.score > 0 then scored.point = point; table.insert(ranked, scored) end
+                if index % 30 == 0 then advisorMessage("Scoring " .. index .. " / " .. #points .. " sampled positions..."); checkpoint() end
+            end
+            table.sort(ranked, function(a, b)
+                if a.score ~= b.score then return a.score > b.score end
+                if a.point.X ~= b.point.X then return a.point.X < b.point.X end
+                return a.point.Z < b.point.Z
+            end)
+            local best: any = nil
+            local checked = 0
+            for index = 1, #ranked do
+                local candidate = ranked[index]
+                local valid = validateAdvisorPoint(name, candidate.point, team)
+                checked += 1
+                if valid then
+                    candidate.request = valid.request
+                    best = candidate
+                    break
+                end
+                if index % 8 == 0 then advisorMessage("Checking placement rules: " .. index .. " candidates..."); checkpoint() end
+            end
+            assert(best, "No valid position was found among the sampled candidates. Check the placement settings, then try again.")
+            for _, step in ipairs({1, 0.5}) do
+                local centre = best.point
+                for x = -2, 2 do
+                    for z = -2, 2 do
+                        local point = advisorProject(centre.X + x * step, centre.Z + z * step, surfaces)
+                        if point then
+                            local candidate = advisorScore(point, definition, routes, allies)
+                            if candidate.score > best.score + 0.0001 then
+                                local valid = validateAdvisorPoint(name, point, team)
+                                checked += 1
+                                if valid then candidate.point = point; candidate.request = valid.request; best = candidate end
+                            end
+                        end
+                    end
+                    checkpoint()
+                end
+            end
+            assert(current(), "The search result is no longer current.")
+            best.name = name
+            best.map = map
+            best.team = team
+            best.userId = sourceId
+            best.playerName = player.Player.DisplayName .. " (@" .. player.Player.Name .. ")"
+            best.range = definition.range
+            best.deadzone = definition.deadzone
+            best.baseRange = definition.baseRange
+            best.targetLevel = definition.targetLevel
+            best.price = definition.price
+            advisorResult = best
+            showAdvisorMarker(best)
+            local plan = definition.planning .. " through level " .. definition.targetLevel .. (if definition.branch then " / branch " .. definition.branch else "")
+            local summary = string.format("Best searched spot for %s\n%s\nRange: %.1f base -> %.1f planned\nAverage path coverage: %.1f base -> %.1f planned studs\nSampled %d positions; validated %d candidates.\nGreen: planned range. Blue: base range. Places at base level; upgrades are separate.", name, plan, definition.baseRange, definition.range, best.baseCoverage, best.coverage, #points, checked)
+            if definition.support then summary = string.format("Best searched support position for %s\n%s\nRange: %.1f base -> %.1f planned\nAllied damage towers covered: %d base -> %d planned\nGreen: planned range. Blue: base range. Places at base level; upgrades are separate.", name, plan, definition.baseRange, definition.range, best.baseAllies, best.allies) end
+            summary = best.playerName .. " | " .. definition.variant .. " stats\n" .. summary
+            summary ..= string.format("\nMinimum range: %.1f base -> %.1f planned. Red marks the planned dead zone; coverage excludes it.\nPosition: X %.1f, Y %.1f, Z %.1f.", definition.baseDeadzone, definition.deadzone, best.point.X, best.point.Y, best.point.Z)
+            if sourceId ~= localPlayer.UserId then summary ..= "\nFriend preview only. Your friend must place the tower; this marker is visible on your client." end
+            advisorMessage(summary)
+        end)
+        if advisorRun == token then
+            advisorBusy = false
+            if not ok then advisorResult = nil; clearAdvisorMarker(); advisorMessage((tostring(problem):gsub("^.-:%d+: ", ""))) end
+        end
+    end)
+end
+local advisorPlacing = false
+local function placeAdvisorTower()
+    assert(not advisorBusy, "Wait for the search to finish.")
+    assert(not advisorPlacing, "A placement request is already running.")
+    local result = advisorResult
+    assert(result and result.name == advisorSelected, "Find a recommended position first.")
+    assert(advisorPlayerId == localPlayer.UserId and result.userId == localPlayer.UserId, "Friend recommendations are preview only. Select My loadout to place your own towers.")
+    assert(result.map == workspace:FindFirstChild("Map") and result.map.Parent == workspace, "The map changed. Find a new position.")
+    assert(table.find(advisorLoadout(localPlayer.UserId), result.name), "That tower is no longer in your loadout.")
+    assert(not GameState.GameOver, "The match has ended.")
+    local player = PlayerReplicator.GetLocalPlayerRaw()
+    assert(player and tostring(player.Team) == tostring(result.team), "Your team changed. Find a new position.")
+    local valid = validateAdvisorPoint(result.name, result.point, player.Team)
+    assert(valid, "That spot is no longer valid. Run Find Best Position again.")
+    advisorPlacing = true
+    local token = advisorRun
+    task.spawn(function()
+        if not alive or Fluent.Unloaded or advisorRun ~= token or GameState.GameOver or result.map ~= workspace:FindFirstChild("Map") then
+            advisorPlacing = false
+            return
+        end
+        local ok, tower, reason = pcall(function()
+            return Troops:InvokeServer("Place", {Position = valid.request, Rotation = CFrame.new()}, result.name)
+        end)
+        advisorPlacing = false
+        if not alive or Fluent.Unloaded or advisorRun ~= token then return end
+        if ok and typeof(tower) == "Instance" then
+            cancelAdvisor()
+            advisorMessage("Placed " .. result.name .. ". Run Find Best Position again for the next tower.")
+        else
+            local message = tostring(if ok then reason or tower or "The server rejected the placement. Check cash and tower limits." else tower)
+            advisorMessage("Placement failed: " .. message)
+            Fluent:Notify({Title = "Placement advisor", Content = message, Duration = 6})
+        end
+    end)
+end
+runtime.onCleanup(cancelAdvisor)
+local advisorConnections: {RBXScriptConnection} = {}
+table.insert(advisorConnections, advisorPlayersService.PlayerAdded:Connect(function()
+    if alive and not Fluent.Unloaded then refreshAdvisorPlayers() end
+end))
+table.insert(advisorConnections, advisorPlayersService.PlayerRemoving:Connect(function(player: Player)
+    if not alive or Fluent.Unloaded then return end
+    if player.UserId == advisorPlayerId then
+        cancelAdvisor()
+        advisorPlayerId = localPlayer.UserId
+        advisorSelected = nil
+        refreshAdvisorLoadout()
+        refreshAdvisorLevels()
+        advisorMessage("The selected player left. Switched back to your loadout.")
+    end
+    refreshAdvisorPlayers(player.UserId)
+end))
+runtime.onCleanup(function()
+    for _, connection in ipairs(advisorConnections) do connection:Disconnect() end
+    table.clear(advisorConnections)
+end)
+
+local autoSkip = false
+local skipError = ""
+local skipCount = 0
+local skipKey = ""
+local skipRetryAt = 0
+local voteFolder: Instance? = nil
+local voteReplicator: any = nil
+local releaseVote: any = nil
+local Collection = game:GetService("CollectionService")
+local TagReplicator: any = loadModule(ReplicatedStorage.Client.Modules.TagReplicator)
+local Voting = loadModule(ReplicatedStorage.Shared.Modules.Network).Channel("Voting")
+local function releaseVoting()
+    if releaseVote then releaseVote() end
+    releaseVote = nil
+    voteReplicator = nil
+    voteFolder = nil
+end
+local function skipStep()
+    if not autoSkip or not alive or Fluent.Unloaded or GameState.GameOver then return end
+    local current = Collection:GetTagged("VoteManager")[1]
+    if current ~= voteFolder then
+        releaseVoting()
+        voteFolder = current
+        if current then voteReplicator, releaseVote = TagReplicator.acquireReplicatorEntityFromFolder(current) end
+    end
+    if not voteReplicator or not voteReplicator:Get("Enabled") then return end
+    local title = tostring(voteReplicator:Get("Title") or ""):lower()
+    if not title:find("skip", 1, true) or title:find("cutscene", 1, true) or title:find("restart", 1, true) then return end
+    if not GameState.GameStarted or (tonumber(GameState.Wave) or 0) < 1 or GameState.VotingForMap then return end
+    for _, field in ipairs({"YesVoted", "NoVoted"}) do
+        for _, id in pairs(voteReplicator:Get(field) or {}) do
+            if tonumber(id) == localPlayer.UserId then return end
+        end
+    end
+    local key = tostring(GameState.Wave) .. ":" .. tostring(voteReplicator:Get("VoteEnd")) .. ":" .. title
+    if key == skipKey or os.clock() < skipRetryAt then return end
+    skipRetryAt = os.clock() + 5
+    local accepted, reason = Voting:InvokeServer("Skip")
+    if accepted == false then error(tostring(reason or "Skip vote was not accepted.")) end
+    skipKey = key
+    skipCount += 1
+end
+runtime.onCleanup(function()
+    autoSkip = false
+    releaseVoting()
+end)
+task.spawn(function()
+    while alive and not Fluent.Unloaded do
+        if autoSkip then
+            local ok, issue = pcall(skipStep)
+            skipError = if ok then "" else tostring(issue)
+        end
+        task.wait(0.5)
+    end
+    releaseVoting()
+end)
+
+local autoAbilities = false
+local abilityError = ""
+local AbilitiesStore: any = loadModule(ReplicatedStorage.Client.Interfaces.Stores.Game.AbilitiesStore)
+local AbilityAmmoStore: any = loadModule(ReplicatedStorage.Client.Interfaces.Stores.Game.AbilityAmmoStore)
+local LockedAbilitiesStore: any = loadModule(ReplicatedStorage.Client.Interfaces.Stores.Game.LockedAbilitiesStore)
+local ClientAtoms: any = loadModule(ReplicatedStorage.Shared.Modules.ClientAtoms)
+local ServerTicks: any = loadModule(ReplicatedStorage.Shared.Modules.ServerTicks)
+local TowerUpgradeUtils: any = loadModule(ReplicatedStorage.Shared.Modules.TowerUpgradeUtils)
+local abilityRetry: {[string]: number} = {}
+local function abilitiesStep()
+    if not autoAbilities or not alive or Fluent.Unloaded or not GameState.GameStarted or GameState.GameOver then return end
+    if ClientAtoms.cloneTowerAtom().blockOtherAbilities then return end
+    local cooldowns = AbilitiesStore.getState()
+    local ammunition = AbilityAmmoStore.getState()
+    local locked = LockedAbilitiesStore.getState()
+    local now = ServerTicks.getTime()
+    for _, tower in pairs(TowerReplicator.getTowers()) do
+        if tower.OwnerId ~= localPlayer.UserId or not tower.Model or not tower.Model.Parent or not tower.Maid then continue end
+        local disabled = tower.Replicator:Get("DisabledAbilities") or {}
+        local level = tonumber(tower.Replicator:Get("Upgrade")) or 0
+        local path = tonumber(tower.Replicator:Get("Path")) or 0
+        for _, ability in pairs(tower.AvailableAbilities or {}) do
+            local name = ability.Name
+            if type(name) ~= "string" or level < (tonumber(ability.Level) or 0) or not TowerUpgradeUtils.matchesPath(ability, path) then continue end
+            if disabled[name] or locked[name] or (tower.AbilityCallbacks and tower.AbilityCallbacks[name]) then continue end
+            local formatted = name:gsub("[^%w]", "")
+            local state = cooldowns[tower.Model] and cooldowns[tower.Model][formatted]
+            if not state or (tonumber(state.deltaTime) or 0) > now then continue end
+            local ammo = ammunition[name .. tostring(tower.UID)]
+            if ammo and ammo.ammo ~= nil and ammo.ammo <= 0 then continue end
+            local key = tostring(tower.UID) .. ":" .. name
+            if (abilityRetry[key] or 0) > os.clock() then continue end
+            if not autoAbilities or not alive or Fluent.Unloaded then return end
+            abilityRetry[key] = os.clock() + 3
+            local accepted, reason = Troops:InvokeServer("Abilities", "Activate", {Name = name, Troop = tower.Model, Data = {}})
+            if accepted == false then
+                abilityRetry[key] = os.clock() + 15
+                abilityError = tostring(reason or "Ability activation was not accepted.")
+            else
+                abilityError = ""
+            end
+            return
+        end
+    end
+end
+runtime.onCleanup(function()
+    autoAbilities = false
+    table.clear(abilityRetry)
+end)
+task.spawn(function()
+    while alive and not Fluent.Unloaded do
+        if autoAbilities then
+            local ok, problem = pcall(abilitiesStep)
+            if not ok then abilityError = tostring(problem) end
+        end
+        task.wait(0.5)
+    end
+end)
+
+local autoUpgrade = false
+local upgradePriority = "Lowest level first"
+local splitPath = 1
+local upgradeBusy = false
+local upgradeEpoch = 0
+local lastUpgradeError = ""
+local retryAfter: {[string]: number} = {}
+local function notify(message: string)
+    if alive and not Fluent.Unloaded then
+        Fluent:Notify({Title = "Ozan Hub", Content = message, Duration = 4})
+    end
+end
+local function cash(): number
+    local player = PlayerReplicator.GetLocalPlayerRaw()
+    if not player or not player.Replicator then return 0 end
+    return math.max(0, tonumber(player.Replicator:Get("Cash")) or 0)
+end
+local function levelOf(tower: any): number
+    return tonumber(tower.Replicator:Get("Upgrade")) or tonumber(tower.Upgrade) or 0
+end
+local function upgradeRecord(tower: any): any
+    if tower.OwnerId ~= localPlayer.UserId or not tower.Model or not tower.Model.Parent or not tower.Maid then return nil end
+    local renderer = tower.StatusEffectRenderer
+    if renderer and renderer:has(GameEnum.StatusEffect.Jailed) then return nil end
+    local level = levelOf(tower)
+    local uid = tostring(tower.UID or tower.Model)
+    local key = uid .. ":" .. level
+    if (retryAfter[key] or 0) > os.clock() then return nil end
+    local stats = tower.Asset and tower.Asset.Stats
+    stats = stats and stats[if tower.GoldenPerks then "Golden" else "Default"]
+    local nextUpgrade = stats and stats.Upgrades and stats.Upgrades[level + 1]
+    if type(nextUpgrade) ~= "table" then return nil end
+    local path: number? = nil
+    if type(nextUpgrade[1]) == "table" then
+        local chosen = tonumber(tower.Replicator:Get("Path")) or 0
+        path = if chosen > 0 then chosen else splitPath
+        nextUpgrade = nextUpgrade[path]
+    end
+    if type(nextUpgrade) ~= "table" or type(nextUpgrade.Cost) ~= "number" then return nil end
+    local discount = tonumber(tower.DiscountBuff) or 0
+    local cost = nextUpgrade.Cost * (1 - discount / 100)
+    local scale: any = ReplicatedStorage.State:FindFirstChild("PriceScale")
+    if scale then cost *= tonumber(scale.Value) or 1 end
+    if GameState.IsModifierEnabled("Inflation") then cost = math.round(cost * 1.5) end
+    cost = math.max(0, math.floor(cost * (tonumber(GameRules.Get("UpgradeCostMultiplier")) or 1)))
+    return {tower = tower, model = tower.Model, level = level, cost = cost, path = path, uid = uid, key = key}
+end
+local function upgradeCandidates(budget: number): {any}
+    local candidates = {}
+    for _, tower in pairs(TowerReplicator.getTowers()) do
+        local record = upgradeRecord(tower)
+        if record and record.cost <= budget then table.insert(candidates, record) end
+    end
+    table.sort(candidates, function(a: any, b: any): boolean
+        if upgradePriority == "Highest level first" and a.level ~= b.level then return a.level > b.level end
+        if upgradePriority == "Cheapest upgrade first" and a.cost ~= b.cost then return a.cost < b.cost end
+        if upgradePriority == "Most expensive upgrade first" and a.cost ~= b.cost then return a.cost > b.cost end
+        if a.level ~= b.level then return a.level < b.level end
+        if a.cost ~= b.cost then return a.cost < b.cost end
+        return a.uid < b.uid
+    end)
+    return candidates
+end
+local function startUpgrades(automatic: boolean)
+    if not alive or Fluent.Unloaded then return end
+    if upgradeBusy then
+        if not automatic then notify("An upgrade pass is already running.") end
+        return
+    end
+    upgradeBusy = true
+    local epoch = upgradeEpoch
+    local budget = cash()
+    task.spawn(function()
+        local purchased = 0
+        local rejected = 0
+        local ok, issue = pcall(function()
+            while alive and not Fluent.Unloaded and (not automatic or (autoUpgrade and epoch == upgradeEpoch)) do
+                budget = math.min(budget, cash())
+                local nextRecord = upgradeCandidates(budget)[1]
+                if not nextRecord then break end
+                local tower = nextRecord.tower
+                if not alive or Fluent.Unloaded then break end
+                if levelOf(tower) ~= nextRecord.level or not nextRecord.model.Parent then continue end
+                local success, accepted, reason = pcall(function()
+                    return Troops:InvokeServer("Upgrade", "Set", {Troop = nextRecord.model, Path = nextRecord.path})
+                end)
+                if not alive or Fluent.Unloaded then break end
+                if not success or not accepted then
+                    rejected += 1
+                    lastUpgradeError = tostring(if success then reason or "Upgrade rejected" else accepted)
+                    retryAfter[nextRecord.key] = os.clock() + 15
+                else
+                    budget = math.max(0, budget - nextRecord.cost)
+                    purchased += 1
+                    local deadline = os.clock() + 3
+                    while alive and not Fluent.Unloaded and nextRecord.model.Parent and levelOf(tower) <= nextRecord.level and os.clock() < deadline do
+                        task.wait(0.05)
+                    end
+                    if nextRecord.model.Parent and levelOf(tower) <= nextRecord.level then
+                        retryAfter[nextRecord.key] = os.clock() + 15
+                        lastUpgradeError = "Waiting for the server to confirm the tower level."
+                        break
+                    end
+                end
+                task.wait(0.2)
+            end
+        end)
+        upgradeBusy = false
+        if not ok then lastUpgradeError = tostring(issue) end
+        if not automatic and alive and not Fluent.Unloaded then
+            if not ok then
+                notify("Upgrades stopped: " .. tostring(issue))
+            elseif rejected > 0 then
+                notify("Purchased " .. purchased .. " upgrades. Skipped " .. rejected .. " rejected requests. " .. lastUpgradeError)
+            else
+                notify("Purchased " .. purchased .. " upgrades with the available budget.")
+            end
+        end
+    end)
+end
+runtime.onCleanup(function()
+    autoUpgrade = false
+    upgradeEpoch += 1
+    table.clear(retryAfter)
+end)
+task.spawn(function()
+    while alive and not Fluent.Unloaded do
+        if autoUpgrade and not upgradeBusy then startUpgrades(true) end
+        task.wait(0.5)
+    end
+end)
+
+local function cleanup()
+    if not alive then return end
+    alive = false
+    enabled = false
+    wallPlacement = false
+    folder:Destroy()
+    if not Fluent.Unloaded then Fluent:Destroy() end
+end
+runtime.onCleanup(cleanup)
+local Window = Fluent:CreateWindow({
+    Title = "Ozan Hub",
+    SubTitle = "Tower Defense Simulator",
+    TabWidth = 130,
+    Size = UDim2.fromOffset(560, 510),
+    Acrylic = false,
+    Theme = "Amethyst",
+    MinimizeKey = Enum.KeyCode.RightShift,
+})
+attachReopenButton(Fluent, Window)
+local Main = Window:AddTab({Title = "Main", Icon = "home"})
+local toggle: any = Main:AddToggle("TowerStacking", {
+    Title = "Place towers inside other towers",
+    Description = "Use a 10-stud placement offset while keeping the preview at normal height. Server placement rules still apply.",
+    Default = true,
+    Callback = function(value: boolean) enabled = alive and value end,
+})
+Main:AddToggle("WallPlacement", {
+    Title = "Place Inside Walls / Paths",
+    Description = "Try walls, paths and raised ground. The selected surface must support your tower type.",
+    Default = false,
+    Callback = function(value: boolean) wallPlacement = alive and value end,
+})
+Main:AddToggle("AutoSkipWaves", {
+    Title = "Auto Skip Waves",
+    Description = "Vote to skip when a wave skip becomes available.",
+    Default = false,
+    Callback = function(value: boolean) autoSkip = value end,
+})
+Main:AddToggle("AutoUseAbilities", {
+    Title = "Auto Use Abilities",
+    Description = "Use ready abilities on your towers, including DJ. Abilities requiring a target stay manual.",
+    Default = false,
+    Callback = function(value: boolean) autoAbilities = value end,
+})
+local upgrades = Main:AddSection("Tower upgrades")
+upgrades:AddDropdown("UpgradePriority", {
+    Title = "Upgrade priority",
+    Description = "Applied to affordable upgrades; recalculated after every purchase.",
+    Values = {"Lowest level first", "Highest level first", "Cheapest upgrade first", "Most expensive upgrade first"},
+    Multi = false,
+    Default = 1,
+    Callback = function(value: string) upgradePriority = value end,
+})
+upgrades:AddDropdown("UpgradePath", {
+    Title = "New upgrade branch",
+    Description = "For towers that have not chosen a branch yet. Existing branches are kept.",
+    Values = {"Path 1", "Path 2", "Path 3"},
+    Multi = false,
+    Default = 1,
+    Callback = function(value: string) splitPath = tonumber(value:match("%d+")) or 1 end,
+})
+upgrades:AddToggle("AutoUpgradeAll", {
+    Title = "Auto Upgrade All Towers",
+    Description = "Continuously upgrade your towers when cash is available.",
+    Default = false,
+    Callback = function(value: boolean)
+        autoUpgrade = value
+        upgradeEpoch += 1
+    end,
+})
+upgrades:AddButton({
+    Title = "Upgrade All Towers",
+    Description = "Spend the cash available now, following your priority, until no further upgrades are affordable.",
+    Callback = function() startUpgrades(false) end,
+})
+
+local Advisor = Window:AddTab({Title = "Placement", Icon = "map-pin"})
+Advisor:AddParagraph({
+    Title = "Placement advisor",
+    Content = "Choose your loadout or another player's to plan their placement. Upgrade ranges and minimum attack ranges are included. Balanced progression averages coverage through the target level. Temporary buffs are not included.",
+})
+advisorControls.Player = Advisor:AddDropdown("AdvisorLoadoutPlayer", {
+    Title = "Whose loadout?", Values = {"My loadout"}, Default = 1, Multi = false,
+    Callback = function(value: string)
+        local userId = advisorPlayerLabels[value] or localPlayer.UserId
+        if userId == advisorPlayerId then return end
+        cancelAdvisor()
+        advisorPlayerId = userId
+        advisorSelected = nil
+        advisorAction(function() refreshAdvisorLoadout(); refreshAdvisorLevels() end)
+        advisorMessage("Loadout changed. Choose a tower and find a position. Friend recommendations are preview only.")
+    end,
+})
+advisorControls.Loadout = Advisor:AddParagraph({Title = "Selected player's loadout", Content = "Loading equipped towers..."})
+advisorControls.Tower = Advisor:AddDropdown("AdvisorTower", {
+    Title = "Tower from selected loadout", Values = {"Select a tower"}, Default = 1, Multi = false,
+    Callback = function(value: string)
+        cancelAdvisor()
+        advisorSelected = if value == "Select a tower" then nil else value
+        advisorAction(refreshAdvisorLevels)
+        advisorMessage("Choose a tower, then press Find Best Position.")
+    end,
+})
+Advisor:AddButton({Title = "Refresh Loadout", Callback = function() advisorAction(function() refreshAdvisorPlayers(); refreshAdvisorLoadout(); refreshAdvisorLevels() end) end})
+Advisor:AddToggle("AdvisorFriendGolden", {
+    Title = "Friend uses Golden Perks", Description = "Enable if your friend's selected tower uses Golden Perks. Your own variant is detected automatically.",
+    Default = false,
+    Callback = function(value: boolean)
+        if advisorFriendGolden == value then return end
+        cancelAdvisor()
+        advisorFriendGolden = value
+        advisorAction(refreshAdvisorLevels)
+        advisorMessage("Tower variant changed. Find a new position.")
+    end,
+})
+advisorControls.Target = Advisor:AddDropdown("AdvisorTargetLevel", {
+    Title = "Plan for upgrade level", Values = {"Fully upgraded", "Base level"}, Default = 1, Multi = false,
+    Callback = function(value: string)
+        cancelAdvisor()
+        advisorTarget = value
+        advisorMessage("Target level changed. Find a new position.")
+    end,
+})
+Advisor:AddDropdown("AdvisorRangePlanning", {
+    Title = "Range planning", Values = {"Balanced progression", "Target level only"}, Default = 1, Multi = false,
+    Callback = function(value: string)
+        cancelAdvisor()
+        advisorPlanning = value
+        advisorMessage("Range planning changed. Find a new position.")
+    end,
+})
+Advisor:AddDropdown("AdvisorUpgradeBranch", {
+    Title = "Planned upgrade branch", Description = "Only affects towers with branching upgrades. Does not change automatic upgrades.",
+    Values = {"Path 1", "Path 2", "Path 3"}, Default = 1, Multi = false,
+    Callback = function(value: string)
+        cancelAdvisor()
+        advisorBranch = tonumber(value:match("%d+")) or 1
+        advisorMessage("Planned branch changed. Find a new position.")
+    end,
+})
+Advisor:AddDropdown("AdvisorObjective", {
+    Title = "Prioritise", Values = {"Most path coverage", "Cover every route", "Earlier engagement"}, Default = 1, Multi = false,
+    Callback = function(value: string)
+        cancelAdvisor()
+        advisorObjective = value
+        advisorMessage("Priority changed. Find a new position.")
+    end,
+})
+Advisor:AddButton({Title = "Find Best Position", Description = "Search and show a marker. This does not place a tower.", Callback = function() advisorAction(findAdvisorPosition) end})
+Advisor:AddButton({Title = "Place Recommended Tower", Description = "Your loadout only. Place one base-level tower; upgrade it separately. Friends place their own towers.", Callback = function() advisorAction(placeAdvisorTower) end})
+Advisor:AddButton({Title = "Cancel Search / Clear Marker", Callback = function() cancelAdvisor(); advisorMessage("Search cancelled. Recommendation cleared.") end})
+advisorControls.Status = Advisor:AddParagraph({Title = "Recommendation", Content = "Choose a player and tower, then press Find Best Position. Green: planned range. Blue: base range. Red: minimum-range dead zone."})
+refreshAdvisorPlayers()
+refreshAdvisorLoadout()
+refreshAdvisorLevels()
+
+local api = Instance.new("BindableFunction")
+api.Name = "API"
+api.Parent = folder
+api.OnInvoke = function(action: string)
+    if action == "Unload" then
+        if runtime.stop then runtime.stop() else cleanup() end
+        return true
+    end
+    return {advisorPlayerId = advisorPlayerId, advisorFriendGolden = advisorFriendGolden, advisorTarget = advisorTarget, advisorPlanning = advisorPlanning, advisorBranch = advisorBranch, advisorBusy = advisorBusy, advisorSelected = advisorSelected, hasRecommendation = advisorResult ~= nil, autoAbilities = autoAbilities, abilityError = abilityError, wallPlacement = wallPlacement, autoSkip = autoSkip, skipError = skipError, skipCount = skipCount, autoUpgrade = autoUpgrade, priority = upgradePriority, busy = upgradeBusy, lastUpgradeError = lastUpgradeError, enabled = enabled, toggle = toggle.Value, offset = 10, placeId = game.PlaceId, loaded = alive}
+end
+Window:SelectTab(1)
+return {loaded = true, stacking = enabled, autoUpgrade = false, title = "Ozan Hub"}
+
+
+
+    end)()
+end
+
+end
+local succeeded, startupResult = xpcall(initializeHub, function(problem: any)
+    return startupStage .. "\n" .. tostring(problem)
+end)
+if not succeeded then
+    pcall(function()
+        local player = game:GetService("Players").LocalPlayer
+        if not player then return end
+        local parent = player:FindFirstChildOfClass("PlayerGui")
+        if not parent then return end
+        local old = parent:FindFirstChild("OzanHubStartupError")
+        if old then old:Destroy() end
+        local screen = Instance.new("ScreenGui")
+        screen.Name = "OzanHubStartupError"
+        screen.ResetOnSpawn = false
+        screen.DisplayOrder = 1000001
+        local panel = Instance.new("TextButton")
+        panel.Name = "Error"
+        panel.AnchorPoint = Vector2.new(0.5, 0.5)
+        panel.Position = UDim2.fromScale(0.5, 0.5)
+        panel.Size = UDim2.fromScale(0.88, 0.65)
+        panel.BackgroundColor3 = Color3.fromRGB(35, 28, 43)
+        panel.TextColor3 = Color3.fromRGB(255, 225, 225)
+        panel.Font = Enum.Font.Gotham
+        panel.TextSize = 16
+        panel.TextWrapped = true
+        panel.Text = "Ozan Hub could not start\n\n" .. tostring(startupResult) .. "\n\nShare this error to diagnose it. Tap to dismiss."
+        panel.Parent = screen
+        local padding = Instance.new("UIPadding")
+        padding.PaddingLeft = UDim.new(0, 16)
+        padding.PaddingRight = UDim.new(0, 16)
+        padding.Parent = panel
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(0, 12)
+        corner.Parent = panel
+        panel.Activated:Connect(function() screen:Destroy() end)
+        screen.Parent = parent
+    end)
+    error(tostring(startupResult), 0)
+end
+return startupResult
