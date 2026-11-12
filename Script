@@ -1,3 +1,16 @@
+local function selectHub(gameId: number, placeId: number): string?
+    if gameId == 1176784616 then return "TDS" end
+    if gameId == 66654135 or placeId == 142823291 then return "MM2" end
+    return nil
+end
+local function dispatchHub(gameId: number, placeId: number, loadTDS: any, loadMM2: any): any
+    local selected = selectHub(gameId, placeId)
+    assert(selected, "Ozan Hub supports Tower Defense Simulator and Murder Mystery 2. This experience is not supported (universe " .. tostring(gameId) .. ", place " .. tostring(placeId) .. ").")
+    if selected == "TDS" then return loadTDS() end
+    return loadMM2()
+end
+
+local function loadTDSHub()
 local startupStage = "Waiting for Roblox to load"
 local function initializeHub()
     local deadline = os.clock() + 30
@@ -18,7 +31,7 @@ local function initializeHub()
         return require(module)
     end
 
-local HUB_BUILD = "2026.11.12-fallen-3"
+local HUB_BUILD = "2026.11.12-universal-1"
 local runtime: any = {}
 local cleanups: {() -> ()} = {}
 local running = true
@@ -3043,6 +3056,1520 @@ if not succeeded then
         if old then old:Destroy() end
         local screen = Instance.new("ScreenGui")
         screen.Name = "OzanHubStartupError"
+        screen.ResetOnSpawn = false
+        screen.DisplayOrder = 1000001
+        local panel = Instance.new("TextButton")
+        panel.Name = "Error"
+        panel.AnchorPoint = Vector2.new(0.5, 0.5)
+        panel.Position = UDim2.fromScale(0.5, 0.5)
+        panel.Size = UDim2.fromScale(0.88, 0.65)
+        panel.BackgroundColor3 = Color3.fromRGB(35, 28, 43)
+        panel.TextColor3 = Color3.fromRGB(255, 225, 225)
+        panel.Font = Enum.Font.Gotham
+        panel.TextSize = 16
+        panel.TextWrapped = true
+        panel.Text = "Ozan Hub could not start\n\n" .. tostring(startupResult) .. "\n\nShare this error to diagnose it. Tap to dismiss."
+        panel.Parent = screen
+        local padding = Instance.new("UIPadding")
+        padding.PaddingLeft = UDim.new(0, 16)
+        padding.PaddingRight = UDim.new(0, 16)
+        padding.Parent = panel
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(0, 12)
+        corner.Parent = panel
+        panel.Activated:Connect(function() screen:Destroy() end)
+        screen.Parent = parent
+    end)
+    error(tostring(startupResult), 0)
+end
+return startupResult
+end
+
+local function loadMM2Hub()
+local previous = workspace:FindFirstChild("FluentRoleHighlights")
+local previousApi = previous and previous:FindFirstChild("API")
+if previousApi then
+    pcall(function()
+        local callbackReader: any = getcallbackvalue
+        local callback = if type(callbackReader) == "function" then callbackReader(previousApi, "OnInvoke") else nil
+        if type(callback) == "function" then callback("Unload") else previousApi:Invoke("Unload") end
+    end)
+end
+local runtime: any = {}
+local cleanups: {() -> ()} = {}
+local running = true
+function runtime.onCleanup(callback: () -> ()) table.insert(cleanups, callback) end
+function runtime.connect(signal: any, callback: any): any
+    local connection = signal:Connect(callback)
+    runtime.onCleanup(function() connection:Disconnect() end)
+    return connection
+end
+function runtime.stop()
+    if not running then return end
+    running = false
+    for index = #cleanups, 1, -1 do pcall(cleanups[index]) end
+    table.clear(cleanups)
+end
+function runtime.alive(): boolean return running end
+function runtime.override(object: any, key: any, replacement: any)
+    local original = object[key]
+    object[key] = replacement
+    runtime.onCleanup(function() if object[key] == replacement then object[key] = original end end)
+end
+
+assert(game.GameId == 66654135 or game.PlaceId == 142823291, "Join Murder Mystery 2 first.")
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local localPlayer = Players.LocalPlayer
+local loadRound: any = require
+local modules = ReplicatedStorage:WaitForChild("Modules", 20)
+assert(modules, "Murder Mystery 2's Modules folder has not replicated yet.")
+local roundModule = modules:WaitForChild("CurrentRoundClient", 20)
+assert(roundModule, "Murder Mystery 2's current-round module is unavailable.")
+local round: any = loadRound(roundModule)
+local remotes = ReplicatedStorage:WaitForChild("Remotes", 20)
+assert(remotes, "Murder Mystery 2's Remotes folder has not replicated yet.")
+local gameplay = remotes:WaitForChild("Gameplay", 20)
+assert(gameplay, "Murder Mystery 2's gameplay remotes are unavailable.")
+local timer = workspace:FindFirstChild("RoundTimerPart")
+local forceLobby = false
+local Fluent: any = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
+local settings: any = game:GetService("HttpService"):JSONDecode([====[{"All":true,"AutoBuyChest":false,"AutoBuyItem":false,"AutoBuyPerk":false,"AutoFarm":true,"AutoPickup":true,"BuyChest":"None","BuyInterval":5,"BuyItem":"None","BuyPerk":"None","CoinHitbox":false,"CoinRadius":4.4,"CurrencyChest":"Coins","CurrencyItem":"Coins","CurrencyPerk":"Coins","FarmDepth":3.6,"FarmKind":"Any","FarmSpeed":21,"FillOpacity":50,"GhostOpacity":50,"HighlightColors":{"Hero":"ff9f3e","Innocent":"57de97","Lobby":"aeb5c1","Murderer":"ff4e64","Sheriff":"4da4ff"},"HubAcrylic":true,"HubMenuKey":"RightShift","HubTheme":"Amethyst","HubTransparency":true,"Innocent":false,"Invisibility":false,"InvisibilityKey":"V","InvisibleHeight":100,"InvisibleShotMs":60,"MaxDistance":2000,"Murderer":false,"NotificationDuration":4,"OutlineOpacity":100,"PickupInterval":1,"PickupKey":"K","Sheriff":false,"ThroughWalls":true,"Xray":false,"XrayTransparency":0.87}]====])
+settings.AutoPickup = false
+settings.PickupInterval = tonumber(settings.PickupInterval) or 1
+settings.Invisibility = false
+settings.InvisibleHeight = tonumber(settings.InvisibleHeight) or 100
+settings.GhostOpacity = tonumber(settings.GhostOpacity) or 50
+settings.AutoFarm = false
+settings.FarmKind = settings.FarmKind or "Any"
+settings.FarmSpeed = tonumber(settings.FarmSpeed) or 8
+settings.FarmDepth = tonumber(settings.FarmDepth) or 3
+settings.CoinHitbox = false
+settings.CoinRadius = tonumber(settings.CoinRadius) or 8
+settings.InvisibleShotMs = tonumber(settings.InvisibleShotMs) or 60
+settings.Xray = false
+settings.XrayTransparency = tonumber(settings.XrayTransparency) or 0.75
+settings.BuyInterval = 5
+for _, group in ipairs({"Chest", "Perk", "Item"}) do
+    settings["Buy" .. group] = settings["Buy" .. group] or "None"
+    settings["Currency" .. group] = settings["Currency" .. group] or "Coins"
+    settings["AutoBuy" .. group] = false
+end
+local options: any = {}
+
+local palette: {[string]: Color3} = {
+    Murderer = Color3.fromRGB(255, 78, 100),
+    Sheriff = Color3.fromRGB(77, 164, 255),
+    Hero = Color3.fromRGB(255, 159, 62),
+    Innocent = Color3.fromRGB(87, 222, 151),
+    Lobby = Color3.fromRGB(174, 181, 193),
+}
+local active = true
+local folder = Instance.new("Folder")
+folder.Name = "FluentRoleHighlights"
+folder.Parent = workspace
+local highlights: {[Player]: Highlight} = {}
+local refresh: any = function() end
+runtime.onCleanup(function()
+    active = false
+    folder:Destroy()
+    if not Fluent.Unloaded then Fluent:Destroy() end
+end)
+
+local function roundIsActive(): boolean
+    if forceLobby then return false end
+    local timeLeft = timer and timer:GetAttribute("Time")
+    if type(timeLeft) == "number" then return timeLeft > 0 end
+    for _, entry in pairs(round.PlayerData or {}) do
+        if type(entry) == "table" and entry.Role and not entry.Dead and not entry.Killed then return true end
+    end
+    return false
+end
+local heroes: {[number]: boolean} = {}
+local function carriesGun(player: Player): boolean
+    local character = player.Character
+    local backpack = player:FindFirstChildOfClass("Backpack")
+    return (character and character:FindFirstChild("Gun") ~= nil) or (backpack and backpack:FindFirstChild("Gun") ~= nil) or false
+end
+local function classify(player: Player): string
+    if not roundIsActive() then return "Lobby" end
+    local data = round.PlayerData
+    if type(data) ~= "table" then return "Lobby" end
+    local entry = data[player.Name] or data[player.UserId] or data[tostring(player.UserId)]
+    if type(entry) ~= "table" or entry.Dead == true or entry.Killed == true then return "Lobby" end
+    local role = entry.Role
+    if role == "Hero" or (role == "Innocent" and carriesGun(player)) then heroes[player.UserId] = true end
+    if heroes[player.UserId] then return "Hero" end
+    if role == "Murderer" or role == "Sheriff" or role == "Innocent" then return role end
+    if role == "Hero" then return "Hero" end
+    return "Lobby"
+end
+local function remove(player: Player)
+    local highlight = highlights[player]
+    if highlight then
+        highlight:Destroy()
+        highlights[player] = nil
+    end
+end
+local function shouldHighlight(player: Player, role: string, character: Model?): boolean
+    if player == localPlayer or not character or not character.Parent then return false end
+    if role == "Lobby" then
+        if not (settings.All or settings.Murderer or settings.Sheriff or settings.Innocent) then return false end
+    elseif not settings.All and settings[if role == "Hero" then "Sheriff" else role] ~= true then return false end
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if humanoid and humanoid.Health <= 0 then return false end
+    local root = character:FindFirstChild("HumanoidRootPart")
+    if not root or not root:IsA("BasePart") then return false end
+    if settings.MaxDistance > 0 then
+        local camera = workspace.CurrentCamera
+        local ownRoot = localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart")
+        local origin = if ownRoot and ownRoot:IsA("BasePart") then ownRoot.Position elseif camera then camera.CFrame.Position else root.Position
+        if (root.Position - origin).Magnitude > settings.MaxDistance then return false end
+    end
+    return true
+end
+refresh = function()
+    if not active then return end
+    if Fluent.Unloaded then
+        active = false
+        folder:ClearAllChildren()
+        table.clear(highlights)
+        return
+    end
+    for _, player in ipairs(Players:GetPlayers()) do
+        local role = classify(player)
+        local character = player.Character
+        if shouldHighlight(player, role, character) then
+            local highlight = highlights[player]
+            if not highlight then
+                highlight = Instance.new("Highlight")
+                highlight.Name = "Role_" .. player.UserId
+                highlight.Parent = folder
+                highlights[player] = highlight
+            end
+            highlight.Adornee = character
+            highlight.FillColor = palette[role]
+            highlight.OutlineColor = palette[role]
+            highlight.FillTransparency = 1 - settings.FillOpacity / 100
+            highlight.OutlineTransparency = 1 - settings.OutlineOpacity / 100
+            highlight.DepthMode = if settings.ThroughWalls then Enum.HighlightDepthMode.AlwaysOnTop else Enum.HighlightDepthMode.Occluded
+            highlight.Enabled = true
+            highlight:SetAttribute("Role", role)
+        else remove(player) end
+    end
+    for player in pairs(highlights) do if player.Parent ~= Players then remove(player) end end
+end
+
+local UIS = game:GetService("UserInputService")
+local proxy: any = nil
+local swappingCharacter = false
+local controlsReady = false
+local pickupBusy = false
+local lastPickup = -math.huge
+local random = Random.new()
+local stopFarm: any = function() end
+local farmState: any = nil
+local killQueue: {number} = {}
+local teardownEffects: any = function() end
+local numeric = function(value: any, fallback: number): number
+    local number = tonumber(value)
+    return if number and number == number then number else fallback
+end
+local function velocityDriver(root: BasePart, name: string): (LinearVelocity, Attachment)
+    local attachment = Instance.new("Attachment")
+    attachment.Name = name .. "Attachment"
+    attachment.Parent = root
+    local velocity = Instance.new("LinearVelocity")
+    velocity.Name = name
+    velocity.Attachment0 = attachment
+    velocity.RelativeTo = Enum.ActuatorRelativeTo.World
+    velocity.VelocityConstraintMode = Enum.VelocityConstraintMode.Vector
+    velocity.ForceLimitsEnabled = false
+    velocity.VectorVelocity = Vector3.zero
+    velocity.Parent = root
+    return velocity, attachment
+end
+local function notice(message: string)
+    if active and not Fluent.Unloaded then
+        Fluent:Notify({Title = "Ozans Hub", Content = message, Duration = numeric(settings.NotificationDuration, 4)})
+    end
+end
+local function currentMap(): Model?
+    for _, object in ipairs(workspace:GetChildren()) do
+        if object:IsA("Model") and object:GetAttribute("MapID") then return object end
+    end
+    return nil
+end
+local function actualCharacter(): Model?
+    return if proxy then proxy.real else localPlayer.Character
+end
+local function controlledCharacter(): Model?
+    return if proxy then proxy.ghost else localPlayer.Character
+end
+local function characterRoot(character: Model?): BasePart?
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+    return if root and root:IsA("BasePart") then root else nil
+end
+local function moveTo(destination: CFrame)
+    local character = controlledCharacter()
+    local root = characterRoot(character)
+    assert(character and root, "Your character is not ready.")
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    assert(not humanoid or humanoid.Health > 0, "Wait for your character to respawn.")
+    if humanoid then humanoid.Sit = false end
+    character:PivotTo(destination)
+    root.AssemblyLinearVelocity = Vector3.zero
+    root.AssemblyAngularVelocity = Vector3.zero
+end
+local function spawnParts(container: Instance): {BasePart}
+    local result = {}
+    local spawns = container:FindFirstChild("Spawns")
+    for _, object in ipairs((spawns or container):GetDescendants()) do
+        if object:IsA("BasePart") and (object:IsA("SpawnLocation") or string.lower(object.Name) == "spawn") then
+            table.insert(result, object)
+        end
+    end
+    return result
+end
+local function teleportMap()
+    local map = currentMap()
+    assert(map, "There is no loaded map right now.")
+    local destination: BasePart? = nil
+    for _, name in ipairs({"TeleportPart", "TeleportationPart", "Teleport", "SpawnPart"}) do
+        local candidate = map:FindFirstChild(name, true)
+        if candidate and candidate:IsA("BasePart") then
+            destination = candidate
+            break
+        end
+    end
+    if not destination then
+        local spawns = spawnParts(map)
+        if #spawns > 0 then destination = spawns[random:NextInteger(1, #spawns)] end
+    end
+    assert(destination, "This map has no available teleport or spawn part.")
+    moveTo(destination.CFrame + Vector3.new(0, destination.Size.Y / 2 + 3, 0))
+end
+local function teleportLobby()
+    local lobby = workspace:FindFirstChild("Lobby")
+    assert(lobby, "The lobby is not loaded.")
+    local spawns = spawnParts(lobby)
+    assert(#spawns > 0, "No lobby spawn locations are available.")
+    local destination = spawns[random:NextInteger(1, #spawns)]
+    moveTo(destination.CFrame + Vector3.new(0, destination.Size.Y / 2 + 3, 0))
+end
+local function teleportRole(role: string)
+    assert(roundIsActive(), "There is no active round.")
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= localPlayer and (classify(player) == role or (role == "Sheriff" and classify(player) == "Hero")) then
+            local root = characterRoot(player.Character)
+            local humanoid = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+            if root and humanoid and humanoid.Health > 0 then
+                moveTo(root.CFrame * CFrame.new(0, 0, 4))
+                return
+            end
+        end
+    end
+    error("No living " .. role .. " is available to teleport to.")
+end
+local function droppedGun(): BasePart?
+    local map = currentMap()
+    local candidate = (map and map:FindFirstChild("GunDrop", true)) or workspace:FindFirstChild("GunDrop", true)
+    if candidate and candidate:IsA("BasePart") then return candidate end
+    if candidate and candidate:IsA("Model") then return candidate.PrimaryPart or candidate:FindFirstChildWhichIsA("BasePart", true) end
+    return nil
+end
+local function eligibleForGun(): boolean
+    local character = actualCharacter()
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+    if not characterRoot(character) or not humanoid or humanoid.Health <= 0 then return false end
+    local backpack = localPlayer:FindFirstChildOfClass("Backpack")
+    for _, container in ipairs({character, backpack}) do
+        if container and (container:FindFirstChild("Gun") or container:FindFirstChild("Knife")) then return false end
+    end
+    local entry = round.PlayerData and round.PlayerData[localPlayer.Name]
+    return roundIsActive() and type(entry) == "table" and not entry.Dead and not entry.Killed and entry.Role ~= "Murderer"
+end
+local function requestGun(automatic: boolean?)
+    if not active or pickupBusy or os.clock() - lastPickup < numeric(settings.PickupInterval, 1) then return end
+    local drop = droppedGun()
+    if not drop then
+        if not automatic then notice("No dropped gun was found.") end
+        return
+    end
+    if not eligibleForGun() then
+        if not automatic then notice("You must be alive in the round without a gun or knife.") end
+        return
+    end
+    local root = characterRoot(actualCharacter())
+    if not root then return end
+    if proxy then
+        if not automatic then notice("Turn off Invisibility to collect the gun with your real character.") end
+        return
+    end
+    lastPickup = os.clock()
+    pickupBusy = true
+    local character = actualCharacter()
+    local origin = character and character:GetPivot()
+    stopFarm()
+    local ok, problem = pcall(function()
+        moveTo(drop.CFrame + Vector3.new(0, 2, 0))
+        pcall(function() firetouchinterest(root, drop, 1) end)
+    end)
+    task.delay(0.25, function()
+        pcall(function() firetouchinterest(root, drop, 0) end)
+        if active and character and localPlayer.Character == character and character.Parent and origin then
+            pcall(function() character:PivotTo(origin) end)
+        end
+        pickupBusy = false
+    end)
+    if not ok and not automatic then notice("Pickup: " .. tostring(problem)) end
+end
+local function mapTop(): number
+    local map = currentMap() or workspace:FindFirstChild("Lobby")
+    if map and map:IsA("Model") then
+        local bounds, size = map:GetBoundingBox()
+        return bounds.Position.Y + size.Y / 2
+    end
+    local root = characterRoot(controlledCharacter())
+    return if root then root.Position.Y else 0
+end
+local function stopInvisibility(restoreCharacter: boolean?)
+    local previous = proxy
+    if not previous then return end
+    proxy = nil
+    if previous.partConnection then previous.partConnection:Disconnect() end
+    if previous.hold then previous.hold:Destroy() end
+    if previous.attachment then previous.attachment:Destroy() end
+    for _, track in pairs(previous.tracks or {}) do pcall(function() track:Stop(0); track:Destroy() end) end
+    local ghostRoot = characterRoot(previous.ghost)
+    local returnFrame = ghostRoot and previous.ghost:GetPivot() or previous.startFrame
+    if previous.real and previous.real.Parent then
+        if restoreCharacter ~= false then previous.real:PivotTo(returnFrame) end
+        for part, properties in pairs(previous.parts) do
+            if part.Parent then
+                part.LocalTransparencyModifier = properties.transparency
+                part.CanCollide = properties.collision
+            end
+        end
+        if previous.root.Parent then
+            previous.root.Anchored = previous.anchored
+            previous.root.AssemblyLinearVelocity = Vector3.zero
+            previous.root.AssemblyAngularVelocity = Vector3.zero
+        end
+    end
+    local camera = workspace.CurrentCamera
+    if camera then
+        local character = localPlayer.Character
+        camera.CameraSubject = character and character:FindFirstChildOfClass("Humanoid") or previous.cameraSubject
+        camera.CameraType = previous.cameraType
+    end
+    if previous.ghost then previous.ghost:Destroy() end
+end
+local function startInvisibility()
+    if proxy then return end
+    local real = localPlayer.Character
+    local root = characterRoot(real)
+    local humanoid = real and real:FindFirstChildOfClass("Humanoid")
+    assert(real and root and humanoid and humanoid.Health > 0, "Wait for a living character.")
+    local camera = workspace.CurrentCamera
+    assert(camera, "The camera is not ready.")
+    local wasArchivable = real.Archivable
+    real.Archivable = true
+    local ok, ghost = pcall(function() return real:Clone() end)
+    real.Archivable = wasArchivable
+    assert(ok and ghost, "Your character could not be cloned.")
+    ghost.Name = "OzansClientCharacter"
+    local ghostRoot = characterRoot(ghost)
+    local ghostHumanoid = ghost:FindFirstChildOfClass("Humanoid")
+    if not ghostRoot or not ghostHumanoid then
+        ghost:Destroy()
+        error("The cloned character is incomplete.")
+    end
+    local savedParts = {}
+    for _, object in ipairs(real:GetDescendants()) do
+        if object:IsA("BasePart") then savedParts[object] = {transparency = object.LocalTransparencyModifier, collision = object.CanCollide} end
+    end
+    local animationIds = {}
+    local originalAnimate = real:FindFirstChild("Animate")
+    if originalAnimate then
+        for _, object in ipairs(originalAnimate:GetDescendants()) do
+            if object:IsA("Animation") and not animationIds[object.Parent.Name] then animationIds[object.Parent.Name] = object.AnimationId end
+        end
+    end
+    for _, object in ipairs(ghost:GetDescendants()) do
+        if object:IsA("Tool") or object:IsA("Script") or object:IsA("LocalScript") then
+            object:Destroy()
+        elseif object:IsA("BasePart") then
+            object.Anchored = false
+            object.LocalTransparencyModifier = 0
+            object.Transparency = if object == ghostRoot then 1 else math.max(object.Transparency, settings.GhostOpacity / 100)
+            object.CanTouch = false
+        elseif object:IsA("Decal") then object.Transparency = math.max(object.Transparency, settings.GhostOpacity / 100) end
+    end
+    ghostHumanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+    ghostHumanoid.WalkSpeed = humanoid.WalkSpeed
+    ghostHumanoid.UseJumpPower = humanoid.UseJumpPower
+    ghostHumanoid.JumpPower = humanoid.JumpPower
+    ghostHumanoid.JumpHeight = humanoid.JumpHeight
+    ghost:PivotTo(real:GetPivot())
+    proxy = {
+        real = real, root = root, ghost = ghost, parts = savedParts,
+        anchored = root.Anchored, startFrame = real:GetPivot(), cameraType = camera.CameraType,
+        cameraSubject = camera.CameraSubject, upperY = mapTop(), map = currentMap(),
+        animationIds = animationIds, tracks = {}, currentAnimation = nil, shotUntil = 0, teleportUntil = 0,
+    }
+    ghost.Parent = workspace
+    proxy.partConnection = real.DescendantAdded:Connect(function(object)
+        if proxy and proxy.real == real and object:IsA("BasePart") and not proxy.parts[object] then
+            proxy.parts[object] = {transparency = object.LocalTransparencyModifier, collision = object.CanCollide}
+            object.LocalTransparencyModifier = 1
+            object.CanCollide = false
+        end
+    end)
+    for part in pairs(savedParts) do
+        part.LocalTransparencyModifier = 1
+        part.CanCollide = false
+    end
+    root.Anchored = false
+    proxy.hold, proxy.attachment = velocityDriver(root, "OzansInvisibilityHold")
+    camera.CameraType = Enum.CameraType.Custom
+    camera.CameraSubject = ghostHumanoid
+end
+local function updateGhostAnimation()
+    if not proxy then return end
+    local humanoid = proxy.ghost:FindFirstChildOfClass("Humanoid")
+    local root = characterRoot(proxy.ghost)
+    if not humanoid or not root then return end
+    local kind = "idle"
+    if humanoid.FloorMaterial == Enum.Material.Air then
+        kind = if root.AssemblyLinearVelocity.Y > 1 then "jump" else "fall"
+    elseif humanoid.MoveDirection.Magnitude > 0.05 then kind = if humanoid.WalkSpeed > 18 then "run" else "walk" end
+    if not proxy.animationIds[kind] then kind = if kind == "run" then "walk" else "idle" end
+    if proxy.currentAnimation == kind then return end
+    local animator = humanoid:FindFirstChildOfClass("Animator")
+    if not animator then animator = Instance.new("Animator"); animator.Parent = humanoid end
+    local track = proxy.tracks[kind]
+    if not track and proxy.animationIds[kind] then
+        local animation = Instance.new("Animation")
+        animation.AnimationId = proxy.animationIds[kind]
+        local ok, loaded = pcall(function() return animator:LoadAnimation(animation) end)
+        animation:Destroy()
+        if ok then
+            track = loaded
+            track.Priority = Enum.AnimationPriority.Movement
+            track.Looped = kind ~= "jump"
+            proxy.tracks[kind] = track
+        end
+    end
+    if track then
+        local previous = proxy.tracks[proxy.currentAnimation]
+        if previous then previous:Stop(0.12) end
+        track:Play(0.12)
+        proxy.currentAnimation = kind
+    end
+end
+local function parkRealCharacter()
+    if not proxy then return end
+    local root = characterRoot(proxy.ghost)
+    if not root or not proxy.root.Parent then return end
+    local position = root.Position
+    proxy.root.CFrame = CFrame.new(position.X, math.max(proxy.upperY, position.Y) + settings.InvisibleHeight, position.Z) * root.CFrame.Rotation
+    proxy.root.AssemblyLinearVelocity = Vector3.zero
+    proxy.root.AssemblyAngularVelocity = Vector3.zero
+end
+local function pulseRealForShot()
+    if not active or not proxy or os.clock() < proxy.teleportUntil or os.clock() < proxy.shotUntil then return end
+    local gun = proxy.real:FindFirstChild("Gun")
+    if not gun or not gun:IsA("Tool") then return end
+    local previous = proxy
+    previous.shotUntil = os.clock() + math.clamp(numeric(settings.InvisibleShotMs, 60), 30, 200) / 1000
+    previous.real:PivotTo(previous.ghost:GetPivot())
+    previous.root.AssemblyLinearVelocity = Vector3.zero
+    task.delay(math.clamp(numeric(settings.InvisibleShotMs, 60), 30, 200) / 1000, function()
+        if proxy == previous and active and os.clock() >= previous.teleportUntil then parkRealCharacter() end
+    end)
+end
+local watchedGuns: {[Tool]: boolean} = {}
+local function watchGun(object: Instance)
+    if not object:IsA("Tool") or object.Name ~= "Gun" or watchedGuns[object] then return end
+    watchedGuns[object] = true
+    runtime.connect(object.Activated, pulseRealForShot)
+end
+local function watchCharacterGuns(character: Model)
+    for _, object in ipairs(character:GetChildren()) do watchGun(object) end
+    runtime.connect(character.ChildAdded, watchGun)
+end
+if localPlayer.Character then watchCharacterGuns(localPlayer.Character) end
+local backpack = localPlayer:FindFirstChildOfClass("Backpack")
+if backpack then
+    for _, object in ipairs(backpack:GetChildren()) do watchGun(object) end
+    runtime.connect(backpack.ChildAdded, watchGun)
+end
+runtime.connect(UIS.InputBegan, function(input, processed)
+    if not processed and input.UserInputType == Enum.UserInputType.MouseButton1 and not UIS:GetFocusedTextBox() then pulseRealForShot() end
+end)
+runtime.connect(gameplay.TeleportToPart.OnClientEvent, function()
+    if not proxy then return end
+    local previous = proxy
+    previous.teleportUntil = os.clock() + 0.25
+    previous.shotUntil = 0
+    task.delay(0.18, function()
+        if not active or proxy ~= previous or not previous.real.Parent or not previous.ghost.Parent then return end
+        previous.ghost:PivotTo(previous.real:GetPivot())
+        previous.upperY = mapTop()
+        previous.map = currentMap()
+        previous.teleportUntil = 0
+        parkRealCharacter()
+    end)
+end)
+local function setInvisibility(value: boolean)
+    if not controlsReady then return end
+    settings.Invisibility = value
+    local ok, problem = pcall(function()
+        if value then
+            stopFarm()
+            startInvisibility()
+        else stopInvisibility(true) end
+    end)
+    if not ok then
+        pcall(function() stopInvisibility(true) end)
+        settings.Invisibility = false
+        if options.Invisibility and options.Invisibility.Value then options.Invisibility:SetValue(false) end
+        notice("Invisibility: " .. tostring(problem))
+    end
+end
+local function enableGodmode()
+    notice("Godmode is unavailable: the old Humanoid swap broke tools and jumping. Respawn once if you used the old version.")
+end
+local function restoreMovement()
+    assert(not proxy and not farmState, "Turn off farming and Invisibility first.")
+    local humanoid = localPlayer.Character and localPlayer.Character:FindFirstChildOfClass("Humanoid")
+    assert(humanoid, "Wait for your character.")
+    humanoid.PlatformStand = false
+    humanoid.Sit = false
+    humanoid.AutoRotate = true
+    humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, true)
+    if humanoid.UseJumpPower and humanoid.JumpPower <= 0 then humanoid.JumpPower = game:GetService("StarterPlayer").CharacterJumpPower end
+    if not humanoid.UseJumpPower and humanoid.JumpHeight <= 0 then humanoid.JumpHeight = game:GetService("StarterPlayer").CharacterJumpHeight end
+    humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
+    notice("Movement restored. Missing server-issued tools may require a normal respawn.")
+end
+local function action(callback: any)
+    if not controlsReady then return end
+    local ok, problem = pcall(callback)
+    if not ok then
+        local message = tostring(problem):gsub("^.-:%d+: ", "")
+        notice(message)
+    end
+end
+runtime.onCleanup(function() stopInvisibility(true) end)
+local originalDestroy = Fluent.Destroy
+runtime.override(Fluent, "Destroy", function(self: any, ...: any)
+    settings.AutoPickup = false
+    settings.Invisibility = false
+    pcall(function() stopInvisibility(true) end)
+    pcall(teardownEffects)
+    return originalDestroy(self, ...)
+end)
+local pickupElapsed = 0
+runtime.connect(RunService.Heartbeat, function(delta: number)
+    if not active then return end
+    if proxy then
+        local realRoot = proxy.root
+        local ghostRoot = characterRoot(proxy.ghost)
+        local realHumanoid = proxy.real:FindFirstChildOfClass("Humanoid")
+        if not ghostRoot or not realRoot.Parent or not realHumanoid or realHumanoid.Health <= 0 then
+            stopInvisibility(false)
+            settings.Invisibility = false
+            if options.Invisibility then options.Invisibility:SetValue(false) end
+            return
+        end
+        local map = currentMap()
+        if map ~= proxy.map then
+            proxy.map = map
+            proxy.upperY = mapTop()
+        end
+        if os.clock() >= proxy.teleportUntil and os.clock() >= proxy.shotUntil then parkRealCharacter() end
+    end
+    pickupElapsed += delta
+    if pickupElapsed >= 0.2 then
+        pickupElapsed = 0
+        if controlsReady and settings.AutoPickup and os.clock() - lastPickup >= numeric(settings.PickupInterval, 1) then requestGun(true) end
+    end
+end)
+local playerControls: any = nil
+runtime.connect(RunService.RenderStepped, function()
+    if not active or not proxy then return end
+    if not playerControls then
+        local module = localPlayer.PlayerScripts:FindFirstChild("PlayerModule")
+        if module then
+            local ok, playerModule = pcall(loadRound, module)
+            if ok then playerControls = playerModule:GetControls() end
+        end
+    end
+    local humanoid = proxy.ghost:FindFirstChildOfClass("Humanoid")
+    local camera = workspace.CurrentCamera
+    if humanoid and camera and playerControls then
+        local input = playerControls:GetMoveVector()
+        local direction = camera.CFrame:VectorToWorldSpace(input)
+        direction = Vector3.new(direction.X, 0, direction.Z)
+        humanoid:Move(if direction.Magnitude > 0 then direction.Unit * math.min(input.Magnitude, 1) else Vector3.zero, false)
+        updateGhostAnimation()
+    end
+end)
+runtime.connect(UIS.JumpRequest, function()
+    if proxy then
+        local humanoid = proxy.ghost:FindFirstChildOfClass("Humanoid")
+        if humanoid then humanoid.Jump = true end
+    end
+end)
+runtime.connect(localPlayer.CharacterAdded, function(character)
+    if swappingCharacter or (proxy and character == proxy.ghost) then return end
+    if proxy then stopInvisibility(false) end
+    settings.Invisibility = false
+    if options.Invisibility then options.Invisibility:SetValue(false) end
+    watchCharacterGuns(character)
+end)
+
+
+local Collection = game:GetService("CollectionService")
+local coinParts: {[BasePart]: boolean} = {}
+local coinSizes: {[BasePart]: Vector3} = {}
+local touchedCoins: {[BasePart]: number} = {}
+local fullBags: {[string]: boolean} = {}
+local ring: Part? = nil
+local farmTarget: BasePart? = nil
+local farmArrivedAt = 0
+local coinRetryUntil: {[BasePart]: number} = {}
+local selectedTarget: string? = nil
+local function isMurderer(): boolean
+    local data = round.PlayerData and round.PlayerData[localPlayer.Name]
+    return type(data) == "table" and data.Role == "Murderer" and not data.Dead and not data.Killed and roundIsActive()
+end
+local function knifeTool(): Tool?
+    for _, parent in ipairs({actualCharacter(), localPlayer:FindFirstChildOfClass("Backpack")}) do
+        if parent then
+            for _, object in ipairs(parent:GetChildren()) do
+                if object:IsA("Tool") and (object.Name == "Knife" or object:FindFirstChild("Stab")) then return object end
+            end
+        end
+    end
+    return nil
+end
+local function targetValues(): {string}
+    local values = {"Select a player"}
+    local names = {}
+    for _, player in ipairs(Players:GetPlayers()) do if player ~= localPlayer then table.insert(names, player.Name) end end
+    table.sort(names)
+    for _, name in ipairs(names) do table.insert(values, name) end
+    return values
+end
+local function refreshTargets()
+    if options.MurderTarget then
+        options.MurderTarget:SetValues(targetValues())
+        if selectedTarget and not Players:FindFirstChild(selectedTarget) then selectedTarget = nil end
+    end
+end
+local function attackPlayer(target: Player)
+    assert(isMurderer(), "This action only works while you are the living Murderer.")
+    assert(not proxy, "Turn off Invisibility before using the knife.")
+    assert(target ~= localPlayer and target.Parent == Players, "Choose another player.")
+    local data = round.PlayerData and round.PlayerData[target.Name]
+    assert(type(data) == "table" and not data.Dead and not data.Killed, "That player is not alive in the round.")
+    local targetRoot = characterRoot(target.Character)
+    local targetHumanoid = target.Character and target.Character:FindFirstChildOfClass("Humanoid")
+    assert(targetRoot and targetHumanoid and targetHumanoid.Health > 0, "The target's character is not ready.")
+    local knife = knifeTool()
+    assert(knife, "Your server-issued knife is missing. Respawn normally if you used the old Godmode.")
+    local character = actualCharacter()
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+    assert(humanoid, "Your character is not ready.")
+    stopFarm()
+    humanoid:EquipTool(knife)
+    local position = (targetRoot.CFrame * CFrame.new(0, 0, 2)).Position
+    moveTo(CFrame.lookAt(position, targetRoot.Position))
+    settings.AutoFarm = false
+    if options.AutoFarm and options.AutoFarm.Value then options.AutoFarm:SetValue(false) end
+    if knife.Parent == character and targetRoot.Parent and isMurderer() then
+        knife:Activate()
+        local handle = knife:FindFirstChild("Handle")
+        if handle and handle:IsA("BasePart") then
+            pcall(function() firetouchinterest(handle, targetRoot, 1) end)
+            task.defer(function()
+                if handle.Parent and targetRoot.Parent then
+                    pcall(function() firetouchinterest(handle, targetRoot, 0) end)
+                end
+            end)
+        end
+    end
+end
+local function attackSelected()
+    local target = selectedTarget and Players:FindFirstChild(selectedTarget)
+    assert(target and target:IsA("Player"), "Select a player from the list first.")
+    attackPlayer(target)
+end
+local function attackAll()
+    assert(isMurderer(), "Kill all only works while you are the living Murderer.")
+    assert(knifeTool(), "Your server-issued knife is missing.")
+    assert(not proxy, "Turn off Invisibility before using the knife.")
+    table.clear(killQueue)
+    for _, player in ipairs(Players:GetPlayers()) do
+        local data = round.PlayerData and round.PlayerData[player.Name]
+        if player ~= localPlayer and type(data) == "table" and not data.Dead and not data.Killed then table.insert(killQueue, player.UserId) end
+    end
+    notice("Queued " .. #killQueue .. " knife targets.")
+end
+local function registerCoin(object: Instance)
+    if object:IsA("BasePart") then coinParts[object] = true end
+end
+for _, object in ipairs(Collection:GetTagged("ServerCoinPart")) do registerCoin(object) end
+runtime.connect(Collection:GetInstanceAddedSignal("ServerCoinPart"), registerCoin)
+runtime.connect(Collection:GetInstanceRemovedSignal("ServerCoinPart"), function(object)
+    coinParts[object] = nil
+    touchedCoins[object] = nil
+    coinRetryUntil[object] = nil
+    if farmTarget == object then farmTarget = nil end
+    local size = coinSizes[object]
+    if size and object.Parent then pcall(function() object.Size = size end) end
+    coinSizes[object] = nil
+end)
+local function coinKind(part: BasePart): string
+    return tostring(part:GetAttribute("CoinID") or "Coin")
+end
+local function coinAvailable(part: BasePart): boolean
+    if not part.Parent or part:GetAttribute("Collected") or part:GetAttribute("Delete") or fullBags[coinKind(part)] then return false end
+    if os.clock() < (coinRetryUntil[part] or 0) then return false end
+    local map = currentMap()
+    if not map or not part:IsDescendantOf(map) then return false end
+    local filter = settings.FarmKind
+    local isCandy = string.find(string.lower(coinKind(part)), "cand", 1, true) ~= nil
+    return filter == "Any" or (filter == "Candy" and isCandy) or (filter == "Coins" and not isCandy)
+end
+local function touchCoin(part: BasePart, root: BasePart)
+    if os.clock() - (touchedCoins[part] or -math.huge) < 0.8 then return end
+    touchedCoins[part] = os.clock()
+    pcall(function() firetouchinterest(root, part, 1) end)
+    task.delay(0.08, function() pcall(function() firetouchinterest(root, part, 0) end) end)
+end
+stopFarm = function()
+    local previous = farmState
+    farmState = nil
+    farmTarget = nil
+    farmArrivedAt = 0
+    if not previous then return end
+    if previous.velocity then previous.velocity:Destroy() end
+    if previous.attachment then previous.attachment:Destroy() end
+    if previous.moved and previous.character == localPlayer.Character and previous.map == currentMap()
+        and previous.root.Parent and previous.humanoid.Parent and previous.humanoid.Health > 0 then
+        previous.character:PivotTo(previous.character:GetPivot() + Vector3.new(0, math.max(previous.depth, 0) + 3, 0))
+    end
+    for part, collision in pairs(previous.collisions) do if part.Parent then part.CanCollide = collision end end
+    for part, canTouch in pairs(previous.touches) do if part.Parent then part.CanTouch = canTouch end end
+    if previous.root.Parent then
+        previous.root.Anchored = previous.anchored
+        previous.root.AssemblyLinearVelocity = Vector3.zero
+    end
+    if previous.humanoid.Parent then previous.humanoid.AutoRotate = previous.autoRotate end
+end
+local function farmStep(delta: number)
+    if not settings.AutoFarm or proxy or pickupBusy or not roundIsActive() then stopFarm(); return end
+    local character = actualCharacter()
+    local root = characterRoot(character)
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+    local data = round.PlayerData and round.PlayerData[localPlayer.Name]
+    if not root or not humanoid or humanoid.Health <= 0 or not data or data.Dead or data.Killed then stopFarm(); return end
+    if not farmState or farmState.character ~= character then
+        stopFarm()
+        local collisions, touches = {}, {}
+        for _, part in ipairs(character:GetDescendants()) do
+            if part:IsA("BasePart") then
+                collisions[part] = part.CanCollide
+                touches[part] = part.CanTouch
+                part.CanCollide = false
+                part.CanTouch = true
+            end
+        end
+        farmState = {character = character, root = root, humanoid = humanoid, collisions = collisions, touches = touches,
+            anchored = root.Anchored, autoRotate = humanoid.AutoRotate, map = currentMap(), moved = false, depth = numeric(settings.FarmDepth, 3)}
+        root.Anchored = false
+        farmState.velocity, farmState.attachment = velocityDriver(root, "OzansFarmMovement")
+        humanoid.AutoRotate = false
+    end
+    if not farmTarget or not coinAvailable(farmTarget) then
+        local nearest = math.huge
+        farmTarget = nil
+        farmArrivedAt = 0
+        for part in pairs(coinParts) do
+            if coinAvailable(part) then
+                local distance = (part.Position - root.Position).Magnitude
+                if distance < nearest then nearest = distance; farmTarget = part end
+            end
+        end
+    end
+    if not farmTarget then stopFarm(); return end
+    local depth = numeric(settings.FarmDepth, 3)
+    farmState.depth = depth
+    local targetPosition = farmTarget.Position - Vector3.new(0, depth, 0)
+    if farmArrivedAt > 0 and os.clock() - farmArrivedAt >= 0.8 then
+        targetPosition = farmTarget.Position
+    end
+    local difference = targetPosition - root.Position
+    local speed = math.min(numeric(settings.FarmSpeed, 8), difference.Magnitude / math.max(delta, 0.01))
+    farmState.velocity.VectorVelocity = if difference.Magnitude > 0.1 then difference.Unit * speed else Vector3.zero
+    farmState.moved = true
+    if difference.Magnitude <= 0.6 then
+        if farmArrivedAt == 0 then farmArrivedAt = os.clock() end
+        touchCoin(farmTarget, root)
+    end
+    if farmArrivedAt > 0 and os.clock() - farmArrivedAt > 5 then
+        coinRetryUntil[farmTarget] = os.clock() + 8
+        farmTarget = nil
+        farmArrivedAt = 0
+        farmState.velocity.VectorVelocity = Vector3.zero
+    end
+end
+local function removeCoinHitbox()
+    if ring then ring:Destroy(); ring = nil end
+    for part, size in pairs(coinSizes) do if part.Parent then pcall(function() part.Size = size end) end end
+    table.clear(coinSizes)
+end
+local radiusElapsed = 0
+local function hitboxStep(delta: number)
+    if not settings.CoinHitbox and not settings.AutoFarm then removeCoinHitbox(); return end
+    local root = characterRoot(actualCharacter())
+    if not root then removeCoinHitbox(); return end
+    local radius = if settings.CoinHitbox then math.clamp(numeric(settings.CoinRadius, 8), 2, 30) else 4
+    if not ring then
+        local cylinder = Instance.new("Part")
+        cylinder.Name = "OzansCoinRange"
+        cylinder.Shape = Enum.PartType.Ball
+        cylinder.Anchored = true
+        cylinder.CanCollide = false
+        cylinder.CanTouch = false
+        cylinder.CanQuery = false
+        cylinder.Material = Enum.Material.Neon
+        cylinder.Color = Color3.fromRGB(255, 189, 77)
+        cylinder.Transparency = 0.78
+        cylinder.CastShadow = false
+        cylinder.Parent = workspace
+        ring = cylinder
+    end
+    local visibleRing = ring
+    assert(visibleRing)
+    visibleRing.Size = Vector3.new(radius * 2, radius * 2, radius * 2)
+    visibleRing.CFrame = CFrame.new(root.Position)
+    radiusElapsed += delta
+    if radiusElapsed < 0.25 or proxy or not roundIsActive() then return end
+    radiusElapsed = 0
+    local budget = 4
+    for part in pairs(coinParts) do
+        if part.Parent and coinAvailable(part) then
+            if not coinSizes[part] then coinSizes[part] = part.Size end
+            local size = coinSizes[part]
+            part.Size = Vector3.new(math.max(size.X, radius * 2), math.max(size.Y, radius * 2), math.max(size.Z, radius * 2))
+            if budget > 0 and (part.Position - root.Position).Magnitude <= radius then
+                touchCoin(part, root)
+                budget -= 1
+            end
+        end
+    end
+end
+runtime.connect(gameplay.CoinCollected.OnClientEvent, function(kind, amount, maximum)
+    if tonumber(amount) and tonumber(maximum) then fullBags[tostring(kind)] = tonumber(amount) >= tonumber(maximum) end
+end)
+runtime.connect(gameplay.CoinsStarted.OnClientEvent, function() table.clear(fullBags); farmTarget = nil end)
+runtime.connect(Players.PlayerAdded, refreshTargets)
+runtime.connect(Players.PlayerRemoving, function() task.defer(refreshTargets) end)
+
+local sync: any = loadRound(ReplicatedStorage.Database.Sync)
+local profile: any = loadRound(ReplicatedStorage.Modules.ProfileData)
+local shopRemotes = ReplicatedStorage.Remotes.Shop
+local catalog: any = {Chest = {}, Perk = {}, Item = {}}
+local catalogLabels: any = {Chest = {"None"}, Perk = {"None"}, Item = {"None"}}
+local currencies = {"Coins"}
+local seenCurrencies = {Coins = true}
+for id, entry in pairs(sync.NewShop or {}) do
+    if type(entry) == "table" and not entry.Offsale and not entry.Hidden and type(entry.Price) == "table" then
+        local prices = {}
+        for currency, price in pairs(entry.Price) do
+            if currency ~= "Robux" and type(price) == "number" and price > 0 then
+                prices[currency] = price
+                if not seenCurrencies[currency] then seenCurrencies[currency] = true; table.insert(currencies, currency) end
+            end
+        end
+        if next(prices) then
+            local group = if entry.Type == "MysteryBox" then "Chest" elseif entry.Type == "Perks" then "Perk" else "Item"
+            if entry.Type ~= "Event" then
+                local metadata = sync[entry.Type] and sync[entry.Type][id]
+                local name = entry.DisplayInfo and entry.DisplayInfo.Name or metadata and (metadata.Name or metadata.ItemName) or id
+                local label = tostring(name) .. " [" .. tostring(id) .. "]"
+                catalog[group][label] = {id = id, data = entry, prices = prices}
+                table.insert(catalogLabels[group], label)
+            end
+        end
+    end
+end
+for _, group in ipairs({"Chest", "Perk", "Item"}) do table.sort(catalogLabels[group], function(a, b) if a == "None" then return true elseif b == "None" then return false else return a < b end end) end
+local shopBusy = false
+local shopElapsed = 0
+local boughtOnce: {[string]: boolean} = {}
+local function balance(currency: string): number
+    local materials = profile.Materials and profile.Materials.Owned or {}
+    local weapons = profile.Weapons and profile.Weapons.Owned or {}
+    return numeric(materials[currency] or weapons[currency] or profile[currency], 0)
+end
+local function alreadyOwned(record: any): boolean
+    if boughtOnce[record.id] then return true end
+    if profile.OneTimePurchases and profile.OneTimePurchases[record.id] then return true end
+    local inventory = profile[record.data.Type]
+    local owned = inventory and inventory.Owned
+    if type(owned) == "table" then
+        if owned[record.id] and owned[record.id] ~= 0 then return true end
+        if table.find(owned, record.id) then return true end
+    end
+    return false
+end
+local function buyStep()
+    if shopBusy or not controlsReady then return end
+    for _, group in ipairs({"Chest", "Perk", "Item"}) do
+        if settings["AutoBuy" .. group] then
+            local record = catalog[group][settings["Buy" .. group]]
+            local currency = settings["Currency" .. group]
+            local price = record and record.prices[currency]
+            local canBuy = record and price and balance(currency) >= price and (group == "Chest" or not alreadyOwned(record))
+            if canBuy then
+                for _, requirement in ipairs(record.data.RequiredPurchases or {}) do
+                    if not profile.OneTimePurchases or not profile.OneTimePurchases[requirement] then canBuy = false; break end
+                end
+            end
+            if canBuy then
+                shopBusy = true
+                task.spawn(function()
+                    if not active or not settings["AutoBuy" .. group] then shopBusy = false; return end
+                    local ok, result = pcall(function()
+                        if group == "Chest" or record.data.Type == "Eggs" then
+                            return shopRemotes.OpenCrate:InvokeServer(record.id, record.data.Type, currency)
+                        end
+                        return shopRemotes.BuyItemNew:InvokeServer(record.id, currency)
+                    end)
+                    if ok and result and group ~= "Chest" then boughtOnce[record.id] = true end
+                    if not ok then notice("Shop: " .. tostring(result)) end
+                    shopBusy = false
+                end)
+                return
+            end
+        end
+    end
+end
+runtime.connect(RunService.Heartbeat, function(delta: number)
+    if not active or not controlsReady then return end
+    farmStep(delta)
+    hitboxStep(delta)
+    if #killQueue > 0 then
+        if not isMurderer() or proxy then table.clear(killQueue) else
+            local id = table.remove(killQueue, 1)
+            local target = Players:GetPlayerByUserId(id)
+            if target then action(function() attackPlayer(target) end) end
+        end
+    end
+    shopElapsed += delta
+    if shopElapsed >= numeric(settings.BuyInterval, 5) then shopElapsed = 0; buyStep() end
+end)
+teardownEffects = function()
+    table.clear(killQueue)
+    settings.AutoFarm = false
+    settings.CoinHitbox = false
+    settings.AutoBuyChest, settings.AutoBuyPerk, settings.AutoBuyItem = false, false, false
+    stopFarm()
+    removeCoinHitbox()
+end
+runtime.onCleanup(teardownEffects)
+
+
+local xrayOriginal: {[Instance]: number} = {}
+local xrayQueue: {Instance} = {}
+local xrayQueued: any = setmetatable({}, {__mode = "k"})
+local xrayIndex = 1
+local xrayGeneration = 0
+local function characterGeometry(object: Instance): boolean
+    local parent: Instance? = object
+    while parent and parent ~= workspace do
+        if parent:IsA("Model") and parent:FindFirstChildOfClass("Humanoid") then return true end
+        parent = parent.Parent
+    end
+    return false
+end
+local function restoreXrayObject(object: any)
+    local original = xrayOriginal[object]
+    if original == nil then return end
+    local restored = pcall(function() object.Transparency = original end)
+    if restored or not object.Parent then xrayOriginal[object] = nil end
+end
+local function applyXrayObject(object: Instance)
+    if not object.Parent or not object:IsDescendantOf(workspace) then return end
+    if characterGeometry(object) or object.Name == "OzansCoinRange" then restoreXrayObject(object); return end
+    if not object:IsA("BasePart") and not object:IsA("Decal") and not object:IsA("Texture") then return end
+    local visual: any = object
+    if xrayOriginal[object] == nil then xrayOriginal[object] = visual.Transparency end
+    visual.Transparency = if xrayOriginal[object] >= 1 then 1 else numeric(settings.XrayTransparency, 0.75)
+end
+local function queueXray(object: Instance)
+    if not active or not settings.Xray or xrayQueued[object] then return end
+    if object:IsA("BasePart") or object:IsA("Decal") or object:IsA("Texture") then
+        xrayQueued[object] = true
+        table.insert(xrayQueue, object)
+    end
+end
+local function scanXray(root: Instance)
+    local generation = xrayGeneration
+    task.spawn(function()
+        for index, object in ipairs(root:GetDescendants()) do
+            if not active or not settings.Xray or generation ~= xrayGeneration then return end
+            queueXray(object)
+            if index % 500 == 0 then task.wait() end
+        end
+    end)
+end
+local function restoreXray()
+    xrayGeneration += 1
+    table.clear(xrayQueue)
+    table.clear(xrayQueued)
+    xrayIndex = 1
+    for object in pairs(xrayOriginal) do restoreXrayObject(object) end
+end
+local function setXray(value: boolean)
+    settings.Xray = value
+    if value then
+        xrayGeneration += 1
+        table.clear(xrayQueue)
+        table.clear(xrayQueued)
+        xrayIndex = 1
+        scanXray(workspace)
+    else restoreXray() end
+end
+local function restoreCharacterXray(character: Model)
+    for _, object in ipairs(character:GetDescendants()) do restoreXrayObject(object) end
+end
+runtime.connect(workspace.DescendantAdded, queueXray)
+runtime.connect(workspace.ChildAdded, function(object)
+    if settings.Xray and object:IsA("Model") then scanXray(object) end
+end)
+local function watchXrayPlayer(player: Player)
+    runtime.connect(player.CharacterAdded, restoreCharacterXray)
+    if player.Character then restoreCharacterXray(player.Character) end
+end
+for _, player in ipairs(Players:GetPlayers()) do watchXrayPlayer(player) end
+runtime.connect(Players.PlayerAdded, watchXrayPlayer)
+runtime.connect(RunService.Heartbeat, function()
+    if not active or not settings.Xray then return end
+    local remaining = 250
+    while remaining > 0 and xrayIndex <= #xrayQueue do
+        local object = xrayQueue[xrayIndex]
+        xrayIndex += 1
+        xrayQueued[object] = nil
+        applyXrayObject(object)
+        remaining -= 1
+    end
+    if xrayIndex > #xrayQueue then table.clear(xrayQueue); xrayIndex = 1 end
+end)
+local previousTeardown = teardownEffects
+teardownEffects = function()
+    previousTeardown()
+    settings.Xray = false
+    restoreXray()
+end
+runtime.onCleanup(restoreXray)
+
+local Window = Fluent:CreateWindow({
+    Title = "Ozan Hub", SubTitle = "MM2 · 2026.11.12-universal-1", TabWidth = 130,
+    Size = UDim2.fromOffset(610, 550), Acrylic = true, Theme = "Dark",
+    MinimizeKey = Enum.KeyCode.RightShift,
+})
+local ESP = Window:AddTab({Title = "ESP", Icon = "eye"})
+ESP:AddParagraph({Title = "Role colors", Content = "Red: Murderer  •  Blue: Sheriff  •  Green: Innocents\nOrange: picked-up gun holder. Lobby: everyone is gray when any highlight is enabled."})
+local roles = ESP:AddSection("Role filters")
+local function toggle(parent: any, id: string, title: string, description: string)
+    options[id] = parent:AddToggle(id, {
+        Title = title, Description = description, Default = settings[id],
+        Callback = function(value: boolean)
+            settings[id] = value
+            refresh()
+        end,
+    })
+end
+toggle(roles, "Murderer", "Highlight Murderer", "Show the active Murderer in red.")
+toggle(roles, "Sheriff", "Highlight Sheriff", "Sheriff: blue. A player who picks up the gun: orange.")
+toggle(roles, "Innocent", "Highlight innocents", "Show active innocents in green.")
+toggle(roles, "All", "Highlight all", "Show every other player; overrides the role filters.")
+local appearance = ESP:AddSection("Highlight settings")
+local function slider(id: string, title: string, description: string, minimum: number, maximum: number)
+    options[id] = appearance:AddSlider(id, {
+        Title = title, Description = description, Default = settings[id],
+        Min = minimum, Max = maximum, Rounding = 0,
+        Callback = function(value: number)
+            settings[id] = value
+            refresh()
+        end,
+    })
+end
+slider("FillOpacity", "Fill opacity (%)", "0 is invisible; 100 is solid.", 0, 100)
+slider("OutlineOpacity", "Outline opacity (%)", "Adjust the visibility of the outline.", 0, 100)
+slider("MaxDistance", "Maximum distance (studs)", "0 removes the distance limit.", 0, 2000)
+toggle(appearance, "ThroughWalls", "Show through walls", "Turn off to show only visible characters.")
+local xraySection = ESP:AddSection("Xray")
+options.Xray = xraySection:AddToggle("Xray", {
+    Title = "Xray", Description = "Fade the world while keeping player characters normal. Automatically applies to new maps.", Default = false,
+    Callback = setXray,
+})
+options.XrayTransparency = xraySection:AddSlider("XrayTransparency", {
+    Title = "World transparency", Default = settings.XrayTransparency, Min = 0, Max = 1, Rounding = 2,
+    Callback = function(value: any)
+        settings.XrayTransparency = math.clamp(numeric(value, 0.75), 0, 1)
+        if settings.Xray then setXray(true) end
+    end,
+})
+local Combat = Window:AddTab({Title = "Combat", Icon = "swords"})
+local Teleport = Window:AddTab({Title = "Teleport", Icon = "navigation"})
+local Farm = Window:AddTab({Title = "Farm", Icon = "leaf"})
+local gunSection = Combat:AddSection("Dropped gun")
+gunSection:AddParagraph({Title = "Touch pickup", Content = "This game version uses a touch trigger, not an exposed pickup remote. Auto pickup runs only when you enable it."})
+options.AutoPickup = gunSection:AddToggle("AutoPickup", {
+    Title = "Auto Pick up gun", Description = "Detect a dropped gun and send its pickup touch.", Default = false,
+    Callback = function(value: boolean) settings.AutoPickup = value end,
+})
+gunSection:AddButton({Title = "Pick up gun", Description = "Attempt to collect the currently dropped gun.", Callback = function() action(function() requestGun(false) end) end})
+options.PickupKey = gunSection:AddKeybind("PickupKey", {
+    Title = "Pickup keybind", Description = "Click the key to change it.", Default = settings.PickupKey or "K", Mode = "Toggle",
+    Callback = function() action(function() requestGun(false) end) end,
+    ChangedCallback = function(value: any) settings.PickupKey = if typeof(value) == "EnumItem" then value.Name else tostring(value) end,
+})
+options.PickupInterval = gunSection:AddSlider("PickupInterval", {
+    Title = "Pickup interval (seconds)", Default = settings.PickupInterval, Min = 0.5, Max = 5, Rounding = 1,
+    Callback = function(value: any) settings.PickupInterval = numeric(value, 1) end,
+})
+local survival = Combat:AddSection("Survival")
+survival:AddButton({Title = "Godmode — unavailable", Description = "The Humanoid-swap version was removed because it broke tools and jumping.", Callback = function() action(enableGodmode) end})
+survival:AddButton({Title = "Restore movement", Description = "Restore jumping and normal Humanoid movement without replacing it.", Callback = function() action(restoreMovement) end})
+local murderer = Combat:AddSection("Murderer")
+options.MurderTarget = murderer:AddDropdown("MurderTarget", {
+    Title = "Target player", Values = targetValues(), Default = "Select a player", Multi = false,
+    Callback = function(value: string) selectedTarget = if value == "Select a player" then nil else value end,
+})
+murderer:AddButton({Title = "Refresh player list", Callback = refreshTargets})
+murderer:AddButton({Title = "Defeat selected player", Description = "Requires your living Murderer role and server-issued knife. Moves you beside the target.", Callback = function() action(attackSelected) end})
+murderer:AddButton({Title = "Kill all", Description = "Attempt living round players each frame with no added delay. Server knife rules still apply.", Callback = function() action(attackAll) end})
+murderer:AddButton({Title = "Stop kill all", Callback = function() table.clear(killQueue) end})
+local invisibility = Combat:AddSection("Invisibility")
+options.Invisibility = invisibility:AddToggle("Invisibility", {
+    Title = "Invisibility", Description = "Control a half-transparent client decoy; park the real character above the map.", Default = false,
+    Callback = setInvisibility,
+})
+options.InvisibilityKey = invisibility:AddKeybind("InvisibilityKey", {
+    Title = "Invisibility keybind", Description = "Click the key to change it.", Default = settings.InvisibilityKey or "V", Mode = "Toggle",
+    Callback = function()
+        if controlsReady then options.Invisibility:SetValue(not settings.Invisibility) end
+    end,
+    ChangedCallback = function(value: any) settings.InvisibilityKey = if typeof(value) == "EnumItem" then value.Name else tostring(value) end,
+})
+options.InvisibleHeight = invisibility:AddSlider("InvisibleHeight", {
+    Title = "Real character height (studs)", Description = "Height above the map. Updates while invisibility is enabled.",
+    Default = settings.InvisibleHeight, Min = 25, Max = 1000, Rounding = 0,
+    Callback = function(value: any) settings.InvisibleHeight = numeric(value, 100) end,
+})
+options.InvisibleShotMs = invisibility:AddSlider("InvisibleShotMs", {
+    Title = "Return above map after shooting (ms)", Description = "Briefly align the real character with the decoy when you fire.",
+    Default = settings.InvisibleShotMs, Min = 30, Max = 200, Rounding = 0,
+    Callback = function(value: any) settings.InvisibleShotMs = numeric(value, 60) end,
+})
+options.GhostOpacity = invisibility:AddSlider("GhostOpacity", {
+    Title = "Decoy transparency (%)", Default = settings.GhostOpacity, Min = 10, Max = 90, Rounding = 0,
+    Callback = function(rawValue: any)
+        local value = numeric(rawValue, 50)
+        settings.GhostOpacity = value
+        if proxy then
+            local root = characterRoot(proxy.ghost)
+            for _, object in ipairs(proxy.ghost:GetDescendants()) do
+                if object:IsA("BasePart") then object.Transparency = if object == root then 1 else value / 100
+                elseif object:IsA("Decal") then object.Transparency = value / 100 end
+            end
+        end
+    end,
+})
+invisibility:AddParagraph({Title = "Client decoy", Content = "The decoy is local. The server can still correct the real character or process damage. Turn invisibility off to return to the decoy's position."})
+local farming = Farm:AddSection("Nearest collectible")
+options.AutoFarm = farming:AddToggle("AutoFarm", {
+    Title = "Auto farm", Description = "Move to the nearest collectible with an automatic 4-stud spherical hitbox. Pauses outside the round or when your bag is full.", Default = false,
+    Callback = function(value: boolean)
+        settings.AutoFarm = value
+        if not value then stopFarm() end
+    end,
+})
+options.FarmKind = farming:AddDropdown("FarmKind", {Title = "Collectible", Values = {"Any", "Candy", "Coins"}, Default = "Any", Multi = false, Callback = function(value: string) settings.FarmKind = value; farmTarget = nil end})
+options.FarmSpeed = farming:AddSlider("FarmSpeed", {Title = "Movement speed (studs/second)", Default = settings.FarmSpeed, Min = 1, Max = 30, Rounding = 1, Callback = function(value: any) settings.FarmSpeed = numeric(value, 8) end})
+options.FarmDepth = farming:AddSlider("FarmDepth", {Title = "Travel depth below collectibles (studs)", Description = "The farmer briefly rises into contact if an item does not collect from below.", Default = settings.FarmDepth, Min = 0, Max = 12, Rounding = 1, Callback = function(value: any) settings.FarmDepth = numeric(value, 3) end})
+local range = Farm:AddSection("Coin Hitbox")
+options.CoinHitbox = range:AddToggle("CoinHitbox", {Title = "Coin Hitbox", Description = "Enable the spherical hitbox separately or override the automatic farming sphere's radius. Reaches above and below you.", Default = false, Callback = function(value: boolean) settings.CoinHitbox = value; if not value and not settings.AutoFarm then removeCoinHitbox() end end})
+options.CoinRadius = range:AddSlider("CoinRadius", {Title = "Collection radius (studs)", Default = settings.CoinRadius, Min = 2, Max = 30, Rounding = 1, Callback = function(value: any) settings.CoinRadius = numeric(value, 8) end})
+range:AddParagraph({Title = "Collection limits", Content = "The ball shows your 3D collection range. Auto Farm includes a 4-stud sphere; Coin Hitbox uses the radius you choose. The server controls collection and bag capacity."})
+local buying = Farm:AddSection("Auto buy from shop")
+buying:AddParagraph({Title = "Choose what to buy", Content = "Only selected targets are purchased once affordable. Chests repeat; owned perks and items are skipped. No Robux purchases or top-ups are triggered."})
+local function updatePriceDescription(group: string)
+    local option = options["Buy" .. group]
+    local record = catalog[group][settings["Buy" .. group]]
+    if not option then return end
+    if not record then option:SetDesc("Select an available shop entry."); return end
+    local prices = {}
+    for currency, price in pairs(record.prices) do table.insert(prices, currency .. ": " .. price) end
+    table.sort(prices)
+    option:SetDesc(table.concat(prices, " · "))
+end
+for _, group in ipairs({"Chest", "Perk", "Item"}) do
+    local name = group
+    options["Buy" .. name] = buying:AddDropdown("Buy" .. name, {
+        Title = if name == "Chest" then "Chest to buy" elseif name == "Perk" then "Perk to buy" else "Item to buy",
+        Values = catalogLabels[name], Default = "None", Multi = false,
+        Callback = function(value: string) settings["Buy" .. name] = value; updatePriceDescription(name) end,
+    })
+    options["Currency" .. name] = buying:AddDropdown("Currency" .. name, {
+        Title = name .. " currency", Values = currencies, Default = "Coins", Multi = false,
+        Callback = function(value: string) settings["Currency" .. name] = value end,
+    })
+    options["AutoBuy" .. name] = buying:AddToggle("AutoBuy" .. name, {
+        Title = "Auto Buy " .. name, Default = false,
+        Description = if name == "Chest" then "Repeat the selected chest while affordable." else "Buy the selected entry once, skipping it if already owned.",
+        Callback = function(value: boolean) settings["AutoBuy" .. name] = value end,
+    })
+end
+options.BuyInterval = buying:AddSlider("BuyInterval", {Title = "Purchase interval (seconds)", Default = 5, Min = 3, Max = 30, Rounding = 0, Callback = function(value: any) settings.BuyInterval = numeric(value, 5) end})
+Teleport:AddParagraph({Title = "Teleport destinations", Content = "Destinations are resolved when clicked, so changing maps and roles are supported."})
+Teleport:AddButton({Title = "Teleport To Map", Description = "Use the current map's teleport part, or one of its spawn parts.", Callback = function() action(teleportMap) end})
+Teleport:AddButton({Title = "Teleport To Lobby", Description = "Choose a random lobby spawn location.", Callback = function() action(teleportLobby) end})
+Teleport:AddButton({Title = "Teleport To Sheriff", Description = "Move beside the current living Sheriff.", Callback = function() action(function() teleportRole("Sheriff") end) end})
+Teleport:AddButton({Title = "Teleport To Murderer", Description = "Move beside the current living Murderer.", Callback = function() action(function() teleportRole("Murderer") end) end})
+local SettingsTab = Window:AddTab({Title = "Settings", Icon = "settings"})
+local appearanceDefaults: {[string]: Color3} = {
+    Murderer = Color3.fromRGB(255, 78, 100), Sheriff = Color3.fromRGB(77, 164, 255),
+    Hero = Color3.fromRGB(255, 159, 62), Innocent = Color3.fromRGB(87, 222, 151),
+    Lobby = Color3.fromRGB(174, 181, 193),
+}
+local themes = {"Dark", "Darker", "Amethyst", "Aqua", "Rose", "Light"}
+local menuKeys = {"RightShift", "LeftAlt", "RightAlt", "F4", "F6", "Insert"}
+local appearanceFile = "OzansHub/appearance.json"
+local function readAppearance(): any
+    if not isfile(appearanceFile) then return nil end
+    local ok, value = pcall(function()
+        local source = readfile(appearanceFile)
+        assert(#source < 12000, "Appearance profile is too large.")
+        return game:GetService("HttpService"):JSONDecode(source)
+    end)
+    return if ok and type(value) == "table" then value else nil
+end
+local savedAppearance = readAppearance() or {}
+settings.HubTheme = if table.find(themes, settings.HubTheme or savedAppearance.Theme) then settings.HubTheme or savedAppearance.Theme else "Dark"
+settings.HubAcrylic = if settings.HubAcrylic ~= nil then settings.HubAcrylic else savedAppearance.Acrylic == true
+settings.HubTransparency = if settings.HubTransparency ~= nil then settings.HubTransparency else savedAppearance.Transparency == true
+settings.HubMenuKey = if table.find(menuKeys, settings.HubMenuKey or savedAppearance.MenuKey) then settings.HubMenuKey or savedAppearance.MenuKey else "RightShift"
+settings.NotificationDuration = math.clamp(numeric(settings.NotificationDuration or savedAppearance.NotificationDuration, 4), 2, 10)
+local currentColors = settings.HighlightColors or savedAppearance.Colors
+if type(currentColors) == "table" then
+    for role, hex in pairs(currentColors) do
+        if palette[role] and type(hex) == "string" and string.match(hex, "^%x%x%x%x%x%x$") then palette[role] = Color3.fromHex(hex) end
+    end
+end
+settings.HighlightColors = {}
+for role, color in pairs(palette) do settings.HighlightColors[role] = color:ToHex() end
+local hubAppearance = SettingsTab:AddSection("Hub appearance")
+options.HubTheme = hubAppearance:AddDropdown("HubTheme", {
+    Title = "Theme", Description = "Change the hub's colors.", Values = themes, Default = settings.HubTheme, Multi = false,
+    Callback = function(value: string)
+        settings.HubTheme = value
+        Fluent:SetTheme(value)
+    end,
+})
+options.HubAcrylic = hubAppearance:AddToggle("HubAcrylic", {
+    Title = "Acrylic blur", Description = "Blur the game behind the menu.", Default = settings.HubAcrylic,
+    Callback = function(value: boolean)
+        settings.HubAcrylic = value
+        Fluent:ToggleAcrylic(value)
+    end,
+})
+options.HubTransparency = hubAppearance:AddToggle("HubTransparency", {
+    Title = "Transparent menu", Default = settings.HubTransparency,
+    Callback = function(value: boolean)
+        settings.HubTransparency = value
+        Fluent:ToggleTransparency(value)
+    end,
+})
+local interface = SettingsTab:AddSection("Interface")
+options.HubMenuKey = interface:AddDropdown("HubMenuKey", {
+    Title = "Show / hide menu key", Values = menuKeys, Default = settings.HubMenuKey, Multi = false,
+    Callback = function(value: string)
+        settings.HubMenuKey = value
+        Fluent.MinimizeKey = Enum.KeyCode[value]
+    end,
+})
+options.NotificationDuration = interface:AddSlider("NotificationDuration", {
+    Title = "Notification duration (seconds)", Default = settings.NotificationDuration, Min = 2, Max = 10, Rounding = 0,
+    Callback = function(value: any) settings.NotificationDuration = numeric(value, 4) end,
+})
+local highlightColors = SettingsTab:AddSection("Highlight colors")
+local colorPickers: any = {}
+for _, role in ipairs({"Murderer", "Sheriff", "Hero", "Innocent", "Lobby"}) do
+    local roleName = role
+    local picker = highlightColors:AddColorpicker("Color" .. roleName, {
+        Title = if roleName == "Hero" then "Picked-up gun holder" elseif roleName == "Innocent" then "Innocents" else roleName,
+        Default = palette[roleName],
+    })
+    colorPickers[roleName] = picker
+    picker:OnChanged(function()
+        palette[roleName] = picker.Value
+        settings.HighlightColors[roleName] = picker.Value:ToHex()
+        refresh()
+    end)
+end
+local function applyAppearance(profileData: any)
+    if type(profileData) ~= "table" then return end
+    if table.find(themes, profileData.Theme) then options.HubTheme:SetValue(profileData.Theme) end
+    options.HubAcrylic:SetValue(profileData.Acrylic == true)
+    options.HubTransparency:SetValue(profileData.Transparency == true)
+    if table.find(menuKeys, profileData.MenuKey) then options.HubMenuKey:SetValue(profileData.MenuKey) end
+    options.NotificationDuration:SetValue(math.clamp(numeric(profileData.NotificationDuration, 4), 2, 10))
+    for role, hex in pairs(profileData.Colors or {}) do
+        if colorPickers[role] and type(hex) == "string" and string.match(hex, "^%x%x%x%x%x%x$") then colorPickers[role]:SetValueRGB(Color3.fromHex(hex)) end
+    end
+end
+local profiles = SettingsTab:AddSection("Appearance profile")
+profiles:AddButton({Title = "Save appearance", Description = "Remember themes, colors and interface preferences on this computer.", Callback = function()
+    action(function()
+        local colors = {}
+        for role, color in pairs(palette) do colors[role] = color:ToHex() end
+        writefile(appearanceFile, game:GetService("HttpService"):JSONEncode({
+            Theme = settings.HubTheme, Acrylic = settings.HubAcrylic,
+            Transparency = settings.HubTransparency, MenuKey = settings.HubMenuKey,
+            NotificationDuration = settings.NotificationDuration, Colors = colors,
+        }))
+        notice("Appearance saved.")
+    end)
+end})
+profiles:AddButton({Title = "Load appearance", Description = "Loads appearance only; automation remains unchanged.", Callback = function()
+    action(function()
+        local data = readAppearance()
+        assert(data, "No saved appearance profile was found.")
+        applyAppearance(data)
+        notice("Appearance loaded.")
+    end)
+end})
+profiles:AddButton({Title = "Reset appearance", Callback = function()
+    action(function()
+        local colors = {}
+        for role, color in pairs(appearanceDefaults) do colors[role] = color:ToHex() end
+        applyAppearance({Theme = "Dark", Acrylic = false, Transparency = false, MenuKey = "RightShift", NotificationDuration = 4, Colors = colors})
+    end)
+end})
+local management = SettingsTab:AddSection("Hub")
+management:AddButton({Title = "Unload Ozans Hub", Description = "Stop automation, remove collection hitboxes and return from the decoy.", Callback = function() action(function() Fluent:Destroy() end) end})
+Fluent:SetTheme(settings.HubTheme)
+Fluent:ToggleAcrylic(settings.HubAcrylic)
+Fluent:ToggleTransparency(settings.HubTransparency)
+Fluent.MinimizeKey = Enum.KeyCode[settings.HubMenuKey]
+
+
+controlsReady = true
+
+
+Window:SelectTab(1)
+
+local api = Instance.new("BindableFunction")
+api.Name = "API"
+api.Parent = folder
+api.OnInvoke = function(action: string, argument: any)
+    if action == "Unload" then
+        if runtime.stop then runtime.stop() else Fluent:Destroy() end
+        return true
+    elseif action == "Set" then
+        assert(type(argument) == "table" and options[argument.id], "Unknown setting")
+        options[argument.id]:SetValue(argument.value)
+        refresh()
+        return true
+    elseif action == "Refresh" then
+        refresh()
+        return true
+    end
+    local rows = {}
+    local counts = {Murderer = 0, Sheriff = 0, Hero = 0, Innocent = 0, Lobby = 0}
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= localPlayer then
+            local role = classify(player)
+            counts[role] += 1
+            table.insert(rows, {name = player.Name, role = role, highlighted = highlights[player] ~= nil})
+        end
+    end
+    return {settings = table.clone(settings), roles = counts, players = rows, lobby = not roundIsActive(), highlights = #folder:GetChildren() - 1, unloaded = Fluent.Unloaded}
+end
+runtime.connect(round.PlayerDataChanged.Event, refresh)
+if timer then runtime.connect(timer:GetAttributeChangedSignal("Time"), refresh) end
+runtime.connect(gameplay.GameOver.OnClientEvent, function()
+    forceLobby = true
+    table.clear(heroes)
+    refresh()
+end)
+runtime.connect(gameplay.RoundStart.OnClientEvent, function()
+    forceLobby = false
+    table.clear(heroes)
+    refresh()
+end)
+runtime.connect(Players.PlayerRemoving, remove)
+local function watch(player: Player)
+    runtime.connect(player.CharacterAdded, function() task.defer(refresh) end)
+    runtime.connect(player.CharacterRemoving, function() remove(player) end)
+end
+for _, player in ipairs(Players:GetPlayers()) do watch(player) end
+runtime.connect(Players.PlayerAdded, watch)
+local elapsed = 0
+runtime.connect(RunService.Heartbeat, function(delta: number)
+    elapsed += delta
+    if elapsed >= 0.2 then
+        elapsed = 0
+        refresh()
+    end
+end)
+refresh()
+return {loaded = true, title = "Ozan Hub", tabs = {"ESP", "Combat", "Teleport", "Farm", "Settings"}, library = "Fluent", version = Fluent.Version}
+end
+
+local startupStage = "Waiting for Roblox to load"
+local function initializeHub()
+    local deadline = os.clock() + 30
+    while not game:IsLoaded() and os.clock() < deadline do task.wait(0.1) end
+    assert(game:IsLoaded(), "Roblox has not finished loading. Join a game and execute the script again.")
+    local players = game:GetService("Players")
+    while not players.LocalPlayer and os.clock() < deadline do task.wait(0.1) end
+    assert(players.LocalPlayer, "The local player is not ready. Execute again after joining.")
+    local playerGui = players.LocalPlayer:WaitForChild("PlayerGui", 15)
+    assert(playerGui, "PlayerGui is not ready.")
+    local previousError = playerGui:FindFirstChild("OzanHubUniversalStartupError")
+    if previousError then previousError:Destroy() end
+    local selected = selectHub(game.GameId, game.PlaceId)
+    startupStage = "Selecting the game hub"
+    if selected then startupStage = "Loading " .. selected .. " · 2026.11.12-universal-1" end
+    local result = dispatchHub(game.GameId, game.PlaceId, loadTDSHub, loadMM2Hub)
+    if type(result) == "table" then result.game = selected; result.universalBuild = "2026.11.12-universal-1" end
+    return result
+end
+local succeeded, startupResult = xpcall(initializeHub, function(problem: any)
+    return startupStage .. "\n" .. tostring(problem)
+end)
+if not succeeded then
+    pcall(function()
+        local player = game:GetService("Players").LocalPlayer
+        if not player then return end
+        local parent = player:FindFirstChildOfClass("PlayerGui")
+        if not parent or parent:FindFirstChild("OzanHubStartupError") then return end
+        local old = parent:FindFirstChild("OzanHubUniversalStartupError")
+        if old then old:Destroy() end
+        local screen = Instance.new("ScreenGui")
+        screen.Name = "OzanHubUniversalStartupError"
         screen.ResetOnSpawn = false
         screen.DisplayOrder = 1000001
         local panel = Instance.new("TextButton")
