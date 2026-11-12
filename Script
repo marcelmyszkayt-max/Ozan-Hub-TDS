@@ -18,7 +18,7 @@ local function initializeHub()
         return require(module)
     end
 
-local HUB_BUILD = "2026.11.12-fallen-2"
+local HUB_BUILD = "2026.11.12-fallen-3"
 local runtime: any = {}
 local cleanups: {() -> ()} = {}
 local running = true
@@ -1375,11 +1375,11 @@ local StrategyModel: any = {}
 function StrategyModel.profileCompatibility(profile: any, current: any, readStats: any, checkpoint: any?): any
     assert(profile and current.mode == profile.mode, "Supported Survival models: Easy, Casual, Intermediate, Molten, Fallen and Frost.")
     local total = tonumber(current.totalWaves)
-    assert(total and total > 0, "Wait for the match mode and wave count to finish loading, then calculate again.")
+    assert(total and total > 0 and total == math.floor(total), "The match wave count is unavailable in the game state and selected mode metadata. The mode data needs verification.")
     assert(total == #profile.waves, "This match has " .. tostring(total) .. " waves; the " .. profile.difficulty .. " profile expects " .. #profile.waves .. ". The wave schedule needs updating.")
     if profile.evidenceLevel ~= "web-and-native" then
         assert(current.version == profile.placeVersion, "The recorded " .. profile.difficulty .. " profile uses match version " .. tostring(profile.placeVersion) .. "; this match is version " .. tostring(current.version) .. ". Record or verify this mode again before automatic play.")
-        return {policy = "recorded-version", currentVersion = current.version, referenceVersion = profile.placeVersion}
+        return {policy = "recorded-version", currentVersion = current.version, referenceVersion = profile.placeVersion, waveCount = total, waveCountSource = current.waveCountSource or "GameState.TotalWaves"}
     end
     assert(type(readStats) == "function", "The researched profile needs access to the current enemy stats.")
     local seen, definitions = {}, 0
@@ -1415,7 +1415,7 @@ function StrategyModel.profileCompatibility(profile: any, current: any, readStat
         definitions += 1
         if checkpoint then checkpoint() end
     end
-    return {policy = "native-core-and-wave-count", currentVersion = current.version, referenceVersion = profile.referenceMatchVersion, nativeDefinitionsValidated = definitions, timing = "estimated"}
+    return {policy = "native-core-and-wave-count", currentVersion = current.version, referenceVersion = profile.referenceMatchVersion, nativeDefinitionsValidated = definitions, timing = "estimated", waveCount = total, waveCountSource = current.waveCountSource or "GameState.TotalWaves"}
 end
 function StrategyModel.merge(base: any, change: any): any
     local result = table.clone(base or {})
@@ -2431,9 +2431,28 @@ local function plannerSites(asset: any, stages: any, routes: any, team: any, tok
     if not supportAnchors then for route in ipairs(routes) do choose(function(candidate: any) return candidate.late[route] end, 1, 2) end end
     return sites
 end
+local function plannerWaveCount(): (number?, string)
+    local total = tonumber(GameState.TotalWaves)
+    if total and total > 0 then return total, "GameState.TotalWaves" end
+    local shared = ReplicatedStorage:FindFirstChild("Shared")
+    local sources = {
+        {node = shared and shared:FindFirstChild("Data"), path = "Shared.Data.GameModeData"},
+        {node = ReplicatedStorage:FindFirstChild("Resources"), path = "Resources.GameModeData"},
+    }
+    for _, source in ipairs(sources) do
+        local data = source.node and source.node:FindFirstChild("GameModeData")
+        local module = data and data:FindFirstChild(tostring(GameState.Difficulty))
+        if not module or not module:IsA("ModuleScript") then continue end
+        local ok, info = pcall(loadModule, module)
+        local waves = if ok and type(info) == "table" then tonumber(info.Waves) else nil
+        if waves and waves > 0 then return waves, source.path .. "." .. tostring(GameState.Difficulty) .. ".Waves" end
+    end
+    return nil, "unavailable"
+end
 local function plannerModel(token: number): any
     plannerProfile = plannerProfiles[GameState.Difficulty]
-    local compatibility = StrategyModel.profileCompatibility(plannerProfile, {mode = GameState.GameMode, totalWaves = GameState.TotalWaves, version = game.PlaceVersion}, function(name: string): any
+    local totalWaves, waveCountSource = plannerWaveCount()
+    local compatibility = StrategyModel.profileCompatibility(plannerProfile, {mode = GameState.GameMode, totalWaves = totalWaves, waveCountSource = waveCountSource, version = game.PlaceVersion}, function(name: string): any
         local content = ReplicatedStorage:FindFirstChild("Content")
         local enemies = content and content:FindFirstChild("NewEnemies")
         local enemy = enemies and enemies:FindFirstChild(name)
