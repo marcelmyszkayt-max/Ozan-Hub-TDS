@@ -31,7 +31,7 @@ local function initializeHub()
         return require(module)
     end
 
-local HUB_BUILD = "2026.11.12-universal-1"
+local HUB_BUILD = "2026.11.12-universal-2"
 local runtime: any = {}
 local cleanups: {() -> ()} = {}
 local running = true
@@ -3086,6 +3086,7 @@ return startupResult
 end
 
 local function loadMM2Hub()
+local MM2Extra: any = nil
 local previous = workspace:FindFirstChild("FluentRoleHighlights")
 local previousApi = previous and previous:FindFirstChild("API")
 if previousApi then
@@ -3156,6 +3157,8 @@ for _, group in ipairs({"Chest", "Perk", "Item"}) do
     settings["Currency" .. group] = settings["Currency" .. group] or "Coins"
     settings["AutoBuy" .. group] = false
 end
+settings.Zombie = false
+settings.Survivor = false
 local options: any = {}
 
 local palette: {[string]: Color3} = {
@@ -3164,6 +3167,7 @@ local palette: {[string]: Color3} = {
     Hero = Color3.fromRGB(255, 159, 62),
     Innocent = Color3.fromRGB(87, 222, 151),
     Lobby = Color3.fromRGB(174, 181, 193),
+    Zombie = Color3.fromRGB(230, 75, 90), Survivor = Color3.fromRGB(77, 164, 255),
 }
 local active = true
 local folder = Instance.new("Folder")
@@ -3198,6 +3202,8 @@ local function classify(player: Player): string
     if type(data) ~= "table" then return "Lobby" end
     local entry = data[player.Name] or data[player.UserId] or data[tostring(player.UserId)]
     if type(entry) ~= "table" or entry.Dead == true or entry.Killed == true then return "Lobby" end
+    local extraRole = MM2Extra and MM2Extra.classify(player, entry)
+    if extraRole then return extraRole end
     local role = entry.Role
     if role == "Hero" or (role == "Innocent" and carriesGun(player)) then heroes[player.UserId] = true end
     if heroes[player.UserId] then return "Hero" end
@@ -3215,8 +3221,13 @@ end
 local function shouldHighlight(player: Player, role: string, character: Model?): boolean
     if player == localPlayer or not character or not character.Parent then return false end
     if role == "Lobby" then
-        if not (settings.All or settings.Murderer or settings.Sheriff or settings.Innocent) then return false end
-    elseif not settings.All and settings[if role == "Hero" then "Sheriff" else role] ~= true then return false end
+        if not (settings.All or settings.Murderer or settings.Sheriff or settings.Innocent or settings.Zombie or settings.Survivor) then return false end
+    elseif not settings.All then
+        local enabled = settings[if role == "Hero" then "Sheriff" else role] == true
+        if role == "Zombie" then enabled = enabled or settings.Murderer end
+        if role == "Survivor" then enabled = enabled or settings.Sheriff end
+        if not enabled then return false end
+    end
     local humanoid = character:FindFirstChildOfClass("Humanoid")
     if humanoid and humanoid.Health <= 0 then return false end
     local root = character:FindFirstChild("HumanoidRootPart")
@@ -3312,6 +3323,7 @@ local function characterRoot(character: Model?): BasePart?
     return if root and root:IsA("BasePart") then root else nil
 end
 local function moveTo(destination: CFrame)
+    if MM2Extra then MM2Extra.stopFling() end
     local character = controlledCharacter()
     local root = characterRoot(character)
     assert(character and root, "Your character is not ready.")
@@ -3388,42 +3400,10 @@ local function eligibleForGun(): boolean
         if container and (container:FindFirstChild("Gun") or container:FindFirstChild("Knife")) then return false end
     end
     local entry = round.PlayerData and round.PlayerData[localPlayer.Name]
-    return roundIsActive() and type(entry) == "table" and not entry.Dead and not entry.Killed and entry.Role ~= "Murderer"
+    return (not MM2Extra or not MM2Extra.isZombie(localPlayer)) and roundIsActive() and type(entry) == "table" and not entry.Dead and not entry.Killed and entry.Role ~= "Murderer"
 end
 local function requestGun(automatic: boolean?)
-    if not active or pickupBusy or os.clock() - lastPickup < numeric(settings.PickupInterval, 1) then return end
-    local drop = droppedGun()
-    if not drop then
-        if not automatic then notice("No dropped gun was found.") end
-        return
-    end
-    if not eligibleForGun() then
-        if not automatic then notice("You must be alive in the round without a gun or knife.") end
-        return
-    end
-    local root = characterRoot(actualCharacter())
-    if not root then return end
-    if proxy then
-        if not automatic then notice("Turn off Invisibility to collect the gun with your real character.") end
-        return
-    end
-    lastPickup = os.clock()
-    pickupBusy = true
-    local character = actualCharacter()
-    local origin = character and character:GetPivot()
-    stopFarm()
-    local ok, problem = pcall(function()
-        moveTo(drop.CFrame + Vector3.new(0, 2, 0))
-        pcall(function() firetouchinterest(root, drop, 1) end)
-    end)
-    task.delay(0.25, function()
-        pcall(function() firetouchinterest(root, drop, 0) end)
-        if active and character and localPlayer.Character == character and character.Parent and origin then
-            pcall(function() character:PivotTo(origin) end)
-        end
-        pickupBusy = false
-    end)
-    if not ok and not automatic then notice("Pickup: " .. tostring(problem)) end
+    if MM2Extra then MM2Extra.pickup(automatic) end
 end
 local function mapTop(): number
     local map = currentMap() or workspace:FindFirstChild("Lobby")
@@ -3467,6 +3447,7 @@ local function stopInvisibility(restoreCharacter: boolean?)
     if previous.ghost then previous.ghost:Destroy() end
 end
 local function startInvisibility()
+    assert(not MM2Extra or not MM2Extra.moving(), "Stop the current movement action first.")
     if proxy then return end
     local real = localPlayer.Character
     local root = characterRoot(real)
@@ -3745,7 +3726,7 @@ local coinRetryUntil: {[BasePart]: number} = {}
 local selectedTarget: string? = nil
 local function isMurderer(): boolean
     local data = round.PlayerData and round.PlayerData[localPlayer.Name]
-    return type(data) == "table" and data.Role == "Murderer" and not data.Dead and not data.Killed and roundIsActive()
+    return type(data) == "table" and (data.Role == "Murderer" or (MM2Extra and MM2Extra.isZombie(localPlayer))) and not data.Dead and not data.Killed and roundIsActive()
 end
 local function knifeTool(): Tool?
     for _, parent in ipairs({actualCharacter(), localPlayer:FindFirstChildOfClass("Backpack")}) do
@@ -3766,6 +3747,7 @@ local function targetValues(): {string}
     return values
 end
 local function refreshTargets()
+    if MM2Extra then MM2Extra.refreshTargets() end
     if options.MurderTarget then
         options.MurderTarget:SetValues(targetValues())
         if selectedTarget and not Players:FindFirstChild(selectedTarget) then selectedTarget = nil end
@@ -3775,6 +3757,7 @@ local function attackPlayer(target: Player)
     assert(isMurderer(), "This action only works while you are the living Murderer.")
     assert(not proxy, "Turn off Invisibility before using the knife.")
     assert(target ~= localPlayer and target.Parent == Players, "Choose another player.")
+    assert(not MM2Extra or not MM2Extra.isZombie(localPlayer) or not MM2Extra.isZombie(target), "That player is already infected.")
     local data = round.PlayerData and round.PlayerData[target.Name]
     assert(type(data) == "table" and not data.Dead and not data.Killed, "That player is not alive in the round.")
     local targetRoot = characterRoot(target.Character)
@@ -3816,7 +3799,7 @@ local function attackAll()
     table.clear(killQueue)
     for _, player in ipairs(Players:GetPlayers()) do
         local data = round.PlayerData and round.PlayerData[player.Name]
-        if player ~= localPlayer and type(data) == "table" and not data.Dead and not data.Killed then table.insert(killQueue, player.UserId) end
+        if player ~= localPlayer and type(data) == "table" and not data.Dead and not data.Killed and (not MM2Extra or not MM2Extra.isZombie(localPlayer) or not MM2Extra.isZombie(player)) then table.insert(killQueue, player.UserId) end
     end
     notice("Queued " .. #killQueue .. " knife targets.")
 end
@@ -3849,8 +3832,8 @@ end
 local function touchCoin(part: BasePart, root: BasePart)
     if os.clock() - (touchedCoins[part] or -math.huge) < 0.8 then return end
     touchedCoins[part] = os.clock()
-    pcall(function() firetouchinterest(root, part, 1) end)
-    task.delay(0.08, function() pcall(function() firetouchinterest(root, part, 0) end) end)
+    pcall(function() firetouchinterest(root, part, 0) end)
+    task.delay(0.08, function() pcall(function() firetouchinterest(root, part, 1) end) end)
 end
 stopFarm = function()
     local previous = farmState
@@ -3873,7 +3856,11 @@ stopFarm = function()
     if previous.humanoid.Parent then previous.humanoid.AutoRotate = previous.autoRotate end
 end
 local function farmStep(delta: number)
-    if not settings.AutoFarm or proxy or pickupBusy or not roundIsActive() then stopFarm(); return end
+    if pickupBusy or (MM2Extra and MM2Extra.moving()) then
+        if farmState and farmState.velocity then farmState.velocity.VectorVelocity = Vector3.zero end
+        return
+    end
+    if not settings.AutoFarm or proxy or not roundIsActive() then stopFarm(); return end
     local character = actualCharacter()
     local root = characterRoot(character)
     local humanoid = character and character:FindFirstChildOfClass("Humanoid")
@@ -4077,6 +4064,7 @@ runtime.connect(RunService.Heartbeat, function(delta: number)
     if shopElapsed >= numeric(settings.BuyInterval, 5) then shopElapsed = 0; buyStep() end
 end)
 teardownEffects = function()
+    if MM2Extra then MM2Extra.cleanup() end
     table.clear(killQueue)
     settings.AutoFarm = false
     settings.CoinHitbox = false
@@ -4181,8 +4169,549 @@ teardownEffects = function()
 end
 runtime.onCleanup(restoreXray)
 
+MM2Extra = (function()
+    local api: any = {}
+    local fling: any = nil
+    local shot: any = nil
+    local epoch = 0
+    local pickupToken = 0
+    local touchPair: any = nil
+    local targetId: number? = nil
+    local pickupStatus: any = nil
+    local shotStatus: any = nil
+    local lastShot = -math.huge
+    local modeUntil, modeValue = 0, false
+    local npcModels: {[Model]: boolean} = {}
+    local npcHighlights: {[Model]: Highlight} = {}
+    local zombieNPC: any = nil
+    local elapsed = 0
+    local propCleanup: any = function() end
+    settings.RoundMode = "Auto"
+    settings.SheriffPart = "Torso"
+    settings.SheriffKey = "F"
+    settings.SheriffMode = "Current position"
+    settings.SheriffWalls = "Require line of sight"
+    settings.SheriffReturnMs = 150
+    settings.FlingDuration = 2
+    settings.FlingPower = 2000
+    local bodyParts = {
+        Torso = {"UpperTorso", "Torso", "LowerTorso"}, Head = {"Head"},
+        LeftArm = {"LeftUpperArm", "Left Arm"}, RightArm = {"RightUpperArm", "Right Arm"},
+        LeftForearm = {"LeftLowerArm", "Left Arm"}, RightForearm = {"RightLowerArm", "Right Arm"},
+        LeftHand = {"LeftHand", "Left Arm"}, RightHand = {"RightHand", "Right Arm"},
+        LeftLeg = {"LeftUpperLeg", "Left Leg"}, RightLeg = {"RightUpperLeg", "Right Leg"},
+        LeftShin = {"LeftLowerLeg", "Left Leg"}, RightShin = {"RightLowerLeg", "Right Leg"},
+        LeftFoot = {"LeftFoot", "Left Leg"}, RightFoot = {"RightFoot", "Right Leg"},
+        LowerTorso = {"LowerTorso", "Torso"}, HumanoidRootPart = {"HumanoidRootPart"},
+    }
+    local function entryFor(player: Player): any
+        local data = round.PlayerData or {}
+        return data[player.Name] or data[player.UserId] or data[tostring(player.UserId)]
+    end
+    local function roleText(value: any): string
+        return string.lower(tostring(value or "")):gsub("[%s_]", "")
+    end
+    local function zombieEntry(entry: any): boolean
+        if type(entry) ~= "table" then return false end
+        local role = roleText(entry.Role)
+        return role == "zombie" or role == "zombies" or role == "infected" or entry.Zombie == true or entry.Infected == true
+    end
+    function api.survival(): boolean
+        if settings.RoundMode == "Classic" then return false end
+        if settings.RoundMode == "Survival / Infection" then return true end
+        if os.clock() < modeUntil then return modeValue end
+        modeUntil, modeValue = os.clock() + 0.25, false
+        local text = roleText(round.GameMode or round.Mode or workspace:GetAttribute("GameMode"))
+        if text:find("survival", 1, true) or text:find("infect", 1, true) then modeValue = true end
+        for _, entry in pairs(round.PlayerData or {}) do
+            if zombieEntry(entry) or (type(entry) == "table" and roleText(entry.Role) == "survivor") then modeValue = true; break end
+        end
+        if not modeValue and zombieNPC then for model in pairs(npcModels) do if model.Parent and zombieNPC(model) then modeValue = true; break end end end
+        return modeValue
+    end
+    function api.isZombie(player: Player): boolean
+        local entry = entryFor(player)
+        if zombieEntry(entry) then return true end
+        local character = player.Character
+        if character and (character:GetAttribute("Zombie") == true or character:GetAttribute("Infected") == true) then return true end
+        if not api.survival() then return false end
+        return character ~= nil and character:FindFirstChild("Knife") ~= nil and not carriesGun(player)
+    end
+    function api.classify(player: Player, entry: any): string?
+        if api.isZombie(player) then return "Zombie" end
+        if api.survival() and (roleText(entry.Role) == "survivor" or carriesGun(player)) then return "Survivor" end
+        return nil
+    end
+    local function living(model: Model?): boolean
+        local humanoid = model and model:FindFirstChildOfClass("Humanoid")
+        return humanoid ~= nil and humanoid.Health > 0 and characterRoot(model) ~= nil
+    end
+    zombieNPC = function(model: Model): boolean
+        if Players:GetPlayerFromCharacter(model) or not living(model) then return false end
+        local role = roleText(model:GetAttribute("Role"))
+        return model:GetAttribute("Zombie") == true or model:GetAttribute("Infected") == true or role == "zombie" or role == "infected" or roleText(model.Name):find("zombie", 1, true) ~= nil or Collection:HasTag(model, "Zombie") or Collection:HasTag(model, "Infected")
+    end
+    local function recordNPC(object: Instance)
+        if object:IsA("Humanoid") and object.Parent and object.Parent:IsA("Model") then npcModels[object.Parent] = true end
+    end
+    for _, object in ipairs(workspace:GetDescendants()) do recordNPC(object) end
+    runtime.connect(workspace.DescendantAdded, recordNPC)
+    local function hitPart(model: Model, name: string): BasePart?
+        for _, candidate in ipairs(bodyParts[name] or {name}) do
+            local part = model:FindFirstChild(candidate)
+            if part and part:IsA("BasePart") then return part end
+        end
+        return nil
+    end
+    local function threat(): Model?
+        local ownRoot = characterRoot(actualCharacter())
+        if not ownRoot then return nil end
+        local nearest, distance = nil, math.huge
+        local survival = api.survival()
+        for _, player in ipairs(Players:GetPlayers()) do
+            local entry = entryFor(player)
+            if player ~= localPlayer and type(entry) == "table" and not entry.Dead and not entry.Killed and living(player.Character) then
+                local hostile = if survival then api.isZombie(player) else entry.Role == "Murderer"
+                if hostile then
+                    local root = characterRoot(player.Character)
+                    local amount = (root.Position - ownRoot.Position).Magnitude
+                    if amount < distance then nearest, distance = player.Character, amount end
+                end
+            end
+        end
+        if survival then
+            for model in pairs(npcModels) do
+                if model.Parent and zombieNPC(model) then
+                    local amount = (characterRoot(model).Position - ownRoot.Position).Magnitude
+                    if amount < distance then nearest, distance = model, amount end
+                end
+            end
+        end
+        return nearest
+    end
+    local function status(control: any, message: string)
+        if control then pcall(control.SetDesc, control, message) end
+    end
+    local function endTouch()
+        local pair = touchPair
+        touchPair = nil
+        if pair and pair[1].Parent and pair[2].Parent and type(firetouchinterest) == "function" then pcall(firetouchinterest, pair[1], pair[2], 1) end
+    end
+    local function cancelPickup()
+        pickupToken += 1
+        endTouch()
+        pickupBusy = false
+    end
+    function api.pickup(automatic: boolean?)
+        if not active or pickupBusy or fling or shot or os.clock() - lastPickup < numeric(settings.PickupInterval, 1) then return end
+        local drop = droppedGun()
+        if not drop then if not automatic then notice("No dropped gun was found.") end; return end
+        if not eligibleForGun() then if not automatic then notice("You must be alive in the round without a gun or knife.") end; return end
+        assert(not proxy, "Turn off Invisibility before collecting the gun.")
+        assert(type(firetouchinterest) == "function", "This executor does not provide touch pickup.")
+        local root = characterRoot(actualCharacter())
+        assert(root, "Your character is not ready.")
+        pickupBusy, lastPickup = true, os.clock()
+        pickupToken += 1
+        local token = pickupToken
+        touchPair = {root, drop}
+        status(pickupStatus, "Contact requested without moving your character. Waiting for the gun...")
+        local ok, problem = pcall(firetouchinterest, root, drop, 0)
+        if not ok then cancelPickup(); status(pickupStatus, tostring(problem)); if not automatic then notice(tostring(problem)) end; return end
+        task.delay(0.08, function() if token == pickupToken then endTouch() end end)
+        task.spawn(function()
+            local deadline = os.clock() + 1.5
+            while token == pickupToken and active and not Fluent.Unloaded and os.clock() < deadline and not carriesGun(localPlayer) do task.wait(0.05) end
+            if token ~= pickupToken then return end
+            endTouch()
+            pickupBusy = false
+            local message = if carriesGun(localPlayer) then "Gun pickup confirmed." else "No gun received. The server may require physical proximity. No teleport was used."
+            status(pickupStatus, message)
+            if not automatic then notice(message) end
+        end)
+    end
+    local function gunTool(): Tool?
+        for _, parent in ipairs({actualCharacter(), localPlayer:FindFirstChildOfClass("Backpack")}) do
+            local gun = parent and parent:FindFirstChild("Gun")
+            if gun and gun:IsA("Tool") then return gun end
+        end
+        return nil
+    end
+    local function shotRemote(gun: Tool): (Instance?, string?)
+        local modern = gun:FindFirstChild("Shoot")
+        if modern and modern:IsA("RemoteEvent") then return modern, "frames" end
+        local script = gun:FindFirstChild("KnifeLocal")
+        local beam = script and script:FindFirstChild("CreateBeam")
+        local legacy = beam and beam:FindFirstChild("RemoteFunction")
+        if legacy and legacy:IsA("RemoteFunction") then return legacy, "legacy" end
+        local named = gun:FindFirstChild("ShootGun", true)
+        if named and named:IsA("RemoteFunction") then return named, "legacy" end
+        return nil, nil
+    end
+    local function clearShot(origin: Vector3, target: BasePart): boolean
+        local params = RaycastParams.new()
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        params.FilterDescendantsInstances = {actualCharacter()}
+        params.IgnoreWater = true
+        local hit = workspace:Raycast(origin, target.Position - origin, params)
+        return hit == nil or hit.Instance:IsDescendantOf(target.Parent)
+    end
+    local function finishShot(state: any)
+        if shot ~= state then return end
+        shot = nil
+        if state.moved and state.epoch == epoch and state.map == currentMap() and state.character == localPlayer.Character and living(state.character) then
+            pcall(function()
+                state.character:PivotTo(state.origin)
+                state.root.AssemblyLinearVelocity = Vector3.zero
+                state.root.AssemblyAngularVelocity = Vector3.zero
+            end)
+        end
+    end
+    function api.shoot(forceBehind: boolean?)
+        assert(not shot and not fling and not pickupBusy, "Wait for the current action to finish.")
+        assert(not proxy, "Turn off Invisibility before using Sheriff shots.")
+        assert(roundIsActive() and living(actualCharacter()), "You must be alive in an active round.")
+        assert(not api.isZombie(localPlayer) and not isMurderer(), "Only an armed Sheriff, Hero or Survivor can use this action.")
+        if os.clock() - lastShot < 1 then return end
+        local gun = gunTool()
+        assert(gun, "You need a server-issued gun.")
+        local target = threat()
+        assert(target, "No living murderer or identified zombie is available.")
+        local part = hitPart(target, settings.SheriffPart)
+        assert(part, "The selected body part is unavailable on this target.")
+        local remote, protocol = shotRemote(gun)
+        assert(remote and protocol, "This gun's supported shot remote was not found.")
+        local character = actualCharacter()
+        local root = characterRoot(character)
+        local state = {character = character, root = root, origin = character:GetPivot(), map = currentMap(), epoch = epoch, moved = false}
+        local behind = forceBehind == true or settings.SheriffMode == "Behind target and return"
+        local obstructed = not clearShot(root.Position + Vector3.new(0, 1, 0), part)
+        if obstructed and settings.SheriffWalls == "Behind target and return" then behind = true end
+        assert(behind or not obstructed or settings.SheriffWalls == "Try through-wall request", "The target is behind cover. Select a different wall-handling option.")
+        assert(behind or settings.SheriffWalls ~= "Try through-wall request" or protocol == "frames", "Stationary through-wall requests need the Gun.Shoot protocol. Use behind-and-return for this gun.")
+        shot, lastShot = state, os.clock()
+        task.spawn(function()
+            local ok, problem = pcall(function()
+                local humanoid = character:FindFirstChildOfClass("Humanoid")
+                humanoid:EquipTool(gun)
+                RunService.Heartbeat:Wait()
+                local deadline = os.clock() + 0.6
+                while shot == state and gun.Parent ~= character and os.clock() < deadline do task.wait() end
+                assert(shot == state and state.epoch == epoch and gun.Parent == character and living(target), "The character, weapon or target changed.")
+                part = hitPart(target, settings.SheriffPart)
+                assert(part, "The target body part is no longer available.")
+                if behind then
+                    local targetRoot = characterRoot(target)
+                    local destination: Vector3? = nil
+                    for _, offset in ipairs({Vector3.new(0, 0, 4), Vector3.new(2, 0, 3), Vector3.new(-2, 0, 3), Vector3.new(0, 2, 3)}) do
+                        local candidate = targetRoot.CFrame:PointToWorldSpace(offset)
+                        if clearShot(candidate + Vector3.new(0, 1, 0), part) then destination = candidate; break end
+                    end
+                    assert(destination, "No clear firing position was found behind the target.")
+                    state.moved = true
+                    character:PivotTo(CFrame.lookAt(destination, part.Position))
+                    root.AssemblyLinearVelocity = Vector3.zero
+                    RunService.Heartbeat:Wait()
+                end
+                assert(shot == state and state.epoch == epoch and living(target) and part.Parent == target and gun.Parent == character and not api.isZombie(localPlayer) and not Fluent.Unloaded, "The round, weapon or target changed before firing.")
+                local aim = part.Position
+                local source = (character:FindFirstChild("RightHand") or character:FindFirstChild("Right Arm") or root).Position
+                if not behind and settings.SheriffWalls == "Try through-wall request" then source = aim + Vector3.new(0, 1, 0) end
+                task.delay(if behind then math.clamp(numeric(settings.SheriffReturnMs, 150), 80, 500) / 1000 else 0.1, function() finishShot(state) end)
+                status(shotStatus, "Shot requested at " .. target.Name .. " / " .. part.Name .. ". Server hit and cooldown rules still apply.")
+                if protocol == "frames" then (remote :: RemoteEvent):FireServer(CFrame.new(source), CFrame.new(aim))
+                else (remote :: RemoteFunction):InvokeServer(1, aim, "AH2") end
+            end)
+            if not ok then finishShot(state); status(shotStatus, tostring(problem)); notice("Sheriff: " .. tostring(problem)) end
+        end)
+        task.delay(2, function() finishShot(state) end)
+    end
+    local function stopFling()
+        local state = fling
+        fling = nil
+        if not state then return end
+        for part, saved in pairs(state.parts) do
+            if part.Parent then pcall(function() part.CanCollide = saved.collision; part.CollisionGroup = saved.group; part.CustomPhysicalProperties = saved.physics end) end
+        end
+        if state.humanoid.Parent then pcall(function() state.humanoid.AutoRotate = state.rotate; state.humanoid:SetStateEnabled(Enum.HumanoidStateType.Seated, state.seated) end) end
+        if state.root.Parent then pcall(function() state.root.AssemblyLinearVelocity = Vector3.zero; state.root.AssemblyAngularVelocity = Vector3.zero end) end
+        if state.epoch == epoch and state.map == currentMap() and state.character == localPlayer.Character and living(state.character) then pcall(function() state.character:PivotTo(state.origin) end) end
+    end
+    api.stopFling = stopFling
+    function api.moving(): boolean return fling ~= nil or shot ~= nil end
+    local function startFling()
+        assert(not fling and not shot and not pickupBusy and not proxy, "Stop the current action or Invisibility first.")
+        local target = targetId and Players:GetPlayerByUserId(targetId)
+        assert(target and target ~= localPlayer and living(target.Character) and living(actualCharacter()), "Select a living player first.")
+        stopFarm()
+        local character = actualCharacter()
+        local root = characterRoot(character)
+        local targetRoot = characterRoot(target.Character)
+        assert(not root.Anchored and not targetRoot.Anchored, "An anchored character cannot be flung.")
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        local state: any = {character = character, root = root, humanoid = humanoid, target = target.Character, epoch = epoch, map = currentMap(), origin = character:GetPivot(), start = os.clock(), parts = {}, rotate = humanoid.AutoRotate, seated = humanoid:GetStateEnabled(Enum.HumanoidStateType.Seated)}
+        for _, part in ipairs(character:GetDescendants()) do
+            if part:IsA("BasePart") then state.parts[part] = {collision = part.CanCollide, group = part.CollisionGroup, physics = part.CustomPhysicalProperties} end
+        end
+        fling = state
+        humanoid.AutoRotate = false
+        humanoid:SetStateEnabled(Enum.HumanoidStateType.Seated, false)
+        root.CustomPhysicalProperties = PhysicalProperties.new(100, 0.3, 0.5)
+    end
+    local function physicsStep()
+        if not active or Fluent.Unloaded then api.cleanup(); return end
+        local state = fling
+        if state then
+            if state.epoch ~= epoch or not living(state.character) or not living(state.target) or state.character ~= localPlayer.Character or os.clock() - state.start > math.clamp(numeric(settings.FlingDuration, 2), 0.5, 5) then stopFling(); return end
+            local targetRoot = characterRoot(state.target)
+            if targetRoot.Anchored then stopFling(); return end
+            for part in pairs(state.parts) do if part.Parent then part.CanCollide = true; part.CollisionGroup = "Default" end end
+            local theta = (os.clock() - state.start) * 55
+            local position = targetRoot.Position + Vector3.new(math.cos(theta) * 1.6, math.sin(theta * 2) * 0.5, math.sin(theta) * 1.6)
+            state.root.CFrame = CFrame.new(position) * CFrame.Angles(theta, theta * 0.7, theta * 1.3)
+            local power = math.clamp(numeric(settings.FlingPower, 2000), 300, 3000)
+            state.root.AssemblyAngularVelocity = Vector3.new(power, power, power)
+            local velocity = targetRoot.AssemblyLinearVelocity
+            if velocity.Magnitude > 150 then velocity = velocity.Unit * 150 end
+            state.root.AssemblyLinearVelocity = velocity + Vector3.new(0, 30, 0)
+            return
+        end
+        if settings.AutoFarm and farmState and farmState.character == actualCharacter() then
+            for _, part in ipairs(farmState.character:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    if farmState.collisions[part] == nil then farmState.collisions[part] = part.CanCollide end
+                    if farmState.touches[part] == nil then farmState.touches[part] = part.CanTouch end
+                    part.CanCollide = false
+                    part.CanTouch = true
+                end
+            end
+        end
+    end
+    function api.refreshTargets()
+        if not options.FlingTarget then return end
+        options.FlingTarget:SetValues(targetValues())
+        if targetId and not Players:GetPlayerByUserId(targetId) then targetId = nil; options.FlingTarget:SetValue("Select a player") end
+    end
+    function api.cleanup()
+        cancelPickup()
+        stopFling()
+        if shot then finishShot(shot) end
+        propCleanup()
+        for model, highlight in pairs(npcHighlights) do highlight:Destroy(); npcHighlights[model] = nil end
+    end
+    local function changedRound()
+        epoch += 1
+        modeUntil = 0
+        api.cleanup()
+    end
+    runtime.connect(localPlayer.CharacterRemoving, changedRound)
+    runtime.connect(gameplay.GameOver.OnClientEvent, changedRound)
+    runtime.connect(gameplay.RoundStart.OnClientEvent, changedRound)
+    local teleport = gameplay:FindFirstChild("TeleportToPart")
+    if teleport and teleport:IsA("RemoteEvent") then runtime.connect(teleport.OnClientEvent, changedRound) end
+    runtime.connect(RunService.PreSimulation, function() local ok, problem = pcall(physicsStep); if not ok then stopFling(); if settings.AutoFarm then settings.AutoFarm = false; stopFarm() end; notice(tostring(problem)) end end)
+    runtime.connect(RunService.Heartbeat, function(delta: number)
+        elapsed += delta
+        if elapsed < 0.25 or not active or not controlsReady or Fluent.Unloaded then return end
+        elapsed = 0
+        for model in pairs(npcModels) do
+            local show = model.Parent and api.survival() and roundIsActive() and zombieNPC(model) and (settings.All or settings.Zombie or settings.Murderer)
+            local root = model.Parent and characterRoot(model)
+            local own = characterRoot(actualCharacter())
+            if show and root and own and numeric(settings.MaxDistance, 2000) > 0 then show = (root.Position - own.Position).Magnitude <= settings.MaxDistance end
+            local highlight = npcHighlights[model]
+            if show then
+                if not highlight then highlight = Instance.new("Highlight"); highlight.Name = "ZombieNPC"; highlight.Parent = folder; npcHighlights[model] = highlight end
+                highlight.Adornee = model
+                highlight.FillColor, highlight.OutlineColor = palette.Zombie, palette.Zombie
+                highlight.FillTransparency = 1 - settings.FillOpacity / 100
+                highlight.OutlineTransparency = 1 - settings.OutlineOpacity / 100
+                highlight.DepthMode = if settings.ThroughWalls then Enum.HighlightDepthMode.AlwaysOnTop else Enum.HighlightDepthMode.Occluded
+            elseif highlight then highlight:Destroy(); npcHighlights[model] = nil end
+            if not model.Parent then npcModels[model] = nil end
+        end
+    end)
+    runtime.onCleanup(api.cleanup)
+local setupProps = (function()
+    local records: any = {}
+    local selected: any = nil
+    local dropdown, description, marker = nil, nil, nil
+    local scanning = false
+    propCleanup = function()
+        if marker then marker:Destroy(); marker = nil end
+        selected = nil
+        table.clear(records)
+    end
+    local function inCharacter(part: BasePart): boolean
+        local parent = part.Parent
+        while parent and parent ~= workspace do
+            if parent:IsA("Model") and parent:FindFirstChildOfClass("Humanoid") then return true end
+            if parent:IsA("Tool") then return true end
+            parent = parent.Parent
+        end
+        return false
+    end
+    local function scan()
+        if scanning then return end
+        scanning = true
+        task.spawn(function()
+            local ok, problem = pcall(function()
+                propCleanup()
+                local own = characterRoot(actualCharacter())
+                assert(own, "Your character is not ready.")
+                local target = targetId and Players:GetPlayerByUserId(targetId)
+                local character = if target and target.Character then target.Character else actualCharacter()
+                local body = {}
+                for _, object in ipairs(character:GetDescendants()) do if object:IsA("BasePart") then table.insert(body, object) end end
+                local physics = game:GetService("PhysicsService")
+                local seen, candidates = {}, {}
+                for index, object in ipairs(workspace:GetDescendants()) do
+                    if index % 500 == 0 then task.wait(); if not active or Fluent.Unloaded then return end end
+                    if not object:IsA("BasePart") or object.Anchored or not object.CanCollide or inCharacter(object) or (object.Position - own.Position).Magnitude > 250 then continue end
+                    local root = object.AssemblyRootPart or object
+                    if root.Anchored or seen[root] then continue end
+                    local collides = false
+                    for _, part in ipairs(body) do
+                        local valid, allowed = pcall(object.CanCollideWith, object, part)
+                        if valid and allowed then collides = true; break end
+                        local validGroup, groupAllowed = pcall(physics.CollisionGroupsAreCollidable, physics, object.CollisionGroup, part.CollisionGroup)
+                        if validGroup and groupAllowed then collides = true; break end
+                    end
+                    if not collides then continue end
+                    seen[root] = true
+                    local owner = "unknown"
+                    if type(isnetworkowner) == "function" then local checked, localOwner = pcall(isnetworkowner, root); if checked then owner = if localOwner then "local" else "not local" end end
+                    table.insert(candidates, {part = object, root = root, distance = (root.Position - own.Position).Magnitude, owner = owner})
+                end
+                table.sort(candidates, function(a: any, b: any) return a.distance < b.distance end)
+                local labels = {"Select a prop"}
+                for index = 1, math.min(#candidates, 150) do
+                    local record = candidates[index]
+                    local label = index .. ": " .. record.root.Name .. " | " .. math.floor(record.distance) .. " studs | owner " .. record.owner
+                    records[label] = record
+                    table.insert(labels, label)
+                end
+                if dropdown then dropdown:SetValues(labels); dropdown:SetValue("Select a prop") end
+                status(description, #candidates .. " unanchored, player-group-compatible assemblies within 250 studs. Character parts and tools excluded. This scan does not move props or obtain ownership.")
+            end)
+            scanning = false
+            if not ok then status(description, tostring(problem)); notice(tostring(problem)) end
+        end)
+    end
+    return function(section: any)
+        section:AddButton({Title = "Scan unanchored player colliders", Description = "Read-only scan near your character; checks the selected player's collision groups when available.", Callback = scan})
+        dropdown = section:AddDropdown("FlingPropCandidate", {Title = "Unanchored prop candidates", Values = {"Select a prop"}, Default = "Select a prop", Multi = false, Callback = function(value: string) selected = records[value]; if selected then status(description, selected.root:GetFullName() .. "\nSurface group: " .. selected.part.CollisionGroup .. " | local ownership: " .. selected.owner) end end})
+        section:AddButton({Title = "Highlight selected prop", Callback = function() action(function()
+            assert(selected and selected.root.Parent, "Select a prop from the scan first.")
+            if marker then marker:Destroy() end
+            marker = Instance.new("Highlight")
+            marker.Name = "FlingPropCandidate"
+            marker.Adornee = selected.root
+            marker.FillColor = Color3.fromRGB(255, 180, 55)
+            marker.OutlineColor = Color3.fromRGB(255, 235, 175)
+            marker.FillTransparency = 0.6
+            marker.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+            marker.Parent = folder
+        end) end})
+        description = section:AddParagraph({Title = "Prop scan", Content = "Not scanned. Unanchored and collidable does not establish network ownership; the scanner reports these separately."})
+    end
+end)()
+
+local setupVoting = (function()
+    local selected, key, attempts, clock = "First available", "", 0, 0
+    local control, message = nil, nil
+    settings.AutoMapVote = false
+    local function choices(): any
+        local lobby = workspace:FindFirstChild("Lobby")
+        local area = lobby and (lobby:FindFirstChild("MapVoting", true) or lobby:FindFirstChild("MapVote", true))
+        local result, seen = {}, {}
+        if not area then return result end
+        for _, object in ipairs(area:GetDescendants()) do
+            if object:IsA("TouchTransmitter") and object.Parent and object.Parent:IsA("BasePart") then
+                local part = object.Parent
+                if not seen[part] then
+                    seen[part] = true
+                    local group = if part.Parent == area then part else part.Parent
+                    local label = tostring(group:GetAttribute("MapName") or part:GetAttribute("MapName") or group.Name)
+                    for _, item in ipairs(group:GetDescendants()) do
+                        if (item:IsA("StringValue") and item.Name == "MapName") then label = item.Value; break end
+                        if item:IsA("TextLabel") and (item.Name == "MapName" or item.Name == "Map") and item.Text ~= "" then label = item.Text; break end
+                    end
+                    table.insert(result, {part = part, name = label})
+                end
+            end
+        end
+        table.sort(result, function(a: any, b: any) return a.name < b.name end)
+        return result
+    end
+    local function refreshVoting(): any
+        local list, labels = choices(), {"First available"}
+        local seen = {}
+        for _, record in ipairs(list) do if not seen[record.name] then seen[record.name] = true; table.insert(labels, record.name) end end
+        if control then control:SetValues(labels) end
+        return list
+    end
+    runtime.connect(RunService.Heartbeat, function(delta: number)
+        clock += delta
+        if clock < 1 or not active or Fluent.Unloaded or not settings.AutoMapVote then return end
+        clock = 0
+        if roundIsActive() then key, attempts = "", 0; return end
+        local list = refreshVoting()
+        local parts = {}
+        for _, record in ipairs(list) do table.insert(parts, record.name) end
+        local signature = table.concat(parts, "|")
+        if key ~= signature then key, attempts = signature, 0 end
+        if #list == 0 then status(message, "Waiting for native map-voting touch pads."); return end
+        local choice = nil
+        for _, record in ipairs(list) do if selected == "First available" or record.name == selected then choice = record; break end end
+        if not choice then status(message, "The preferred map is not among the current choices."); return end
+        if attempts >= 3 then return end
+        local root = characterRoot(actualCharacter())
+        if not root or proxy or type(firetouchinterest) ~= "function" then status(message, "A living character and touch support are required."); return end
+        attempts += 1
+        local part = choice.part
+        local ok, problem = pcall(firetouchinterest, root, part, 0)
+        task.delay(0.08, function() if root.Parent and part.Parent then pcall(firetouchinterest, root, part, 1) end end)
+        status(message, if ok then "Vote contact requested: " .. choice.name .. " (" .. attempts .. "/3). Repeated requests do not confirm extra votes." else tostring(problem))
+    end)
+    return function(combat: any)
+        local section = combat:AddSection("Map voting")
+        control = section:AddDropdown("MapVoteChoice", {Title = "Preferred map / vote pad", Values = {"First available"}, Default = "First available", Multi = false, Callback = function(value: string) selected = value; key, attempts = "", 0 end})
+        section:AddToggle("AutoMapVote", {Title = "Auto vote map", Description = "Uses exposed lobby voting pads; at most three contact requests, one second apart, per set of choices. No teleport.", Default = false, Callback = function(value: boolean) settings.AutoMapVote = value; key, attempts = "", 0 end})
+        section:AddButton({Title = "Refresh voting choices", Callback = refreshVoting})
+        message = section:AddParagraph({Title = "Voting status", Content = "Off. Native vote pads are discovered while in the lobby. No invented voting remote is used."})
+        refreshVoting()
+    end
+end)()
+
+    function api.setupUI(combat: any, gunSection: any)
+        pickupStatus = gunSection:AddParagraph({Title = "Pickup status", Content = "Idle. Pickup attempts do not move your character."})
+        local sheriff = combat:AddSection("Sheriff")
+        sheriff:AddDropdown("RoundMode", {Title = "Round mode", Values = {"Auto", "Classic", "Survival / Infection"}, Default = "Auto", Multi = false, Callback = function(value: string) settings.RoundMode = value; modeUntil = 0; refresh() end})
+        sheriff:AddDropdown("SheriffPart", {Title = "Target body part", Values = {"Torso", "Head", "LowerTorso", "HumanoidRootPart", "LeftArm", "LeftForearm", "LeftHand", "RightArm", "RightForearm", "RightHand", "LeftLeg", "LeftShin", "LeftFoot", "RightLeg", "RightShin", "RightFoot"}, Default = "Torso", Multi = false, Callback = function(value: string) settings.SheriffPart = value end})
+        sheriff:AddDropdown("SheriffMode", {Title = "Shot mode", Values = {"Current position", "Behind target and return"}, Default = "Current position", Multi = false, Callback = function(value: string) settings.SheriffMode = value end})
+        sheriff:AddDropdown("SheriffWalls", {Title = "Wall handling", Values = {"Require line of sight", "Try through-wall request", "Behind target and return"}, Default = "Require line of sight", Multi = false, Callback = function(value: string) settings.SheriffWalls = value end})
+        sheriff:AddParagraph({Title = "Targeting", Content = "Classic: living Murderer. Survival: nearest identified zombie player or NPC. Armed survivors are excluded. Through-wall requests use the known Gun.Shoot protocol and may be rejected by the server."})
+        sheriff:AddButton({Title = "Shoot threat", Callback = function() action(function() api.shoot(false) end) end})
+        sheriff:AddButton({Title = "Behind threat, shoot and return", Callback = function() action(function() api.shoot(true) end) end})
+        sheriff:AddKeybind("SheriffShotKey", {Title = "Shoot keybind", Default = "F", Mode = "Toggle", Callback = function() if not UIS:GetFocusedTextBox() then action(function() api.shoot(false) end) end end, ChangedCallback = function(value: any) settings.SheriffKey = if typeof(value) == "EnumItem" then value.Name else tostring(value) end})
+        sheriff:AddSlider("SheriffReturnMs", {Title = "Return after shot (ms)", Default = 150, Min = 80, Max = 500, Rounding = 0, Callback = function(value: number) settings.SheriffReturnMs = value end})
+        shotStatus = sheriff:AddParagraph({Title = "Shot status", Content = "Ready. Requires your server-issued gun."})
+        local flinging = combat:AddSection("Fling")
+        options.FlingTarget = flinging:AddDropdown("FlingTarget", {Title = "Target player", Values = targetValues(), Default = "Select a player", Multi = false, Callback = function(value: string) local player = Players:FindFirstChild(value); targetId = player and player:IsA("Player") and player.UserId or nil end})
+        flinging:AddButton({Title = "Refresh player list", Callback = api.refreshTargets})
+        flinging:AddButton({Title = "Fling selected player", Description = "Brief physics-contact attempt, followed by position and collision restoration. Depends on server collision rules.", Callback = function() action(startFling) end})
+        flinging:AddButton({Title = "Stop fling", Callback = stopFling})
+        flinging:AddSlider("FlingDuration", {Title = "Attempt duration (seconds)", Default = 2, Min = 0.5, Max = 5, Rounding = 1, Callback = function(value: number) settings.FlingDuration = value end})
+        flinging:AddSlider("FlingPower", {Title = "Spin speed", Default = 2000, Min = 300, Max = 3000, Rounding = 0, Callback = function(value: number) settings.FlingPower = value end})
+        setupProps(flinging)
+        setupVoting(combat)
+    end
+    return api
+end)()
+
 local Window = Fluent:CreateWindow({
-    Title = "Ozan Hub", SubTitle = "MM2 · 2026.11.12-universal-1", TabWidth = 130,
+    Title = "Ozan Hub", SubTitle = "MM2 · 2026.11.12-universal-2", TabWidth = 130,
     Size = UDim2.fromOffset(610, 550), Acrylic = true, Theme = "Dark",
     MinimizeKey = Enum.KeyCode.RightShift,
 })
@@ -4202,6 +4731,8 @@ toggle(roles, "Murderer", "Highlight Murderer", "Show the active Murderer in red
 toggle(roles, "Sheriff", "Highlight Sheriff", "Sheriff: blue. A player who picks up the gun: orange.")
 toggle(roles, "Innocent", "Highlight innocents", "Show active innocents in green.")
 toggle(roles, "All", "Highlight all", "Show every other player; overrides the role filters.")
+toggle(roles, "Zombie", "Highlight Zombies", "Survival/Infection zombie players and identified NPCs.")
+toggle(roles, "Survivor", "Highlight Survivors", "Armed survivors in Survival/Infection.")
 local appearance = ESP:AddSection("Highlight settings")
 local function slider(id: string, title: string, description: string, minimum: number, maximum: number)
     options[id] = appearance:AddSlider(id, {
@@ -4233,7 +4764,7 @@ local Combat = Window:AddTab({Title = "Combat", Icon = "swords"})
 local Teleport = Window:AddTab({Title = "Teleport", Icon = "navigation"})
 local Farm = Window:AddTab({Title = "Farm", Icon = "leaf"})
 local gunSection = Combat:AddSection("Dropped gun")
-gunSection:AddParagraph({Title = "Touch pickup", Content = "This game version uses a touch trigger, not an exposed pickup remote. Auto pickup runs only when you enable it."})
+gunSection:AddParagraph({Title = "Touch pickup", Content = "Attempts native touch pickup without moving your character. Pickup is confirmed only when your Gun appears; server distance checks can reject it."})
 options.AutoPickup = gunSection:AddToggle("AutoPickup", {
     Title = "Auto Pick up gun", Description = "Detect a dropped gun and send its pickup touch.", Default = false,
     Callback = function(value: boolean) settings.AutoPickup = value end,
@@ -4260,6 +4791,7 @@ murderer:AddButton({Title = "Refresh player list", Callback = refreshTargets})
 murderer:AddButton({Title = "Defeat selected player", Description = "Requires your living Murderer role and server-issued knife. Moves you beside the target.", Callback = function() action(attackSelected) end})
 murderer:AddButton({Title = "Kill all", Description = "Attempt living round players each frame with no added delay. Server knife rules still apply.", Callback = function() action(attackAll) end})
 murderer:AddButton({Title = "Stop kill all", Callback = function() table.clear(killQueue) end})
+MM2Extra.setupUI(Combat, gunSection)
 local invisibility = Combat:AddSection("Invisibility")
 options.Invisibility = invisibility:AddToggle("Invisibility", {
     Title = "Invisibility", Description = "Control a half-transparent client decoy; park the real character above the map.", Default = false,
@@ -4299,7 +4831,7 @@ options.GhostOpacity = invisibility:AddSlider("GhostOpacity", {
 invisibility:AddParagraph({Title = "Client decoy", Content = "The decoy is local. The server can still correct the real character or process damage. Turn invisibility off to return to the decoy's position."})
 local farming = Farm:AddSection("Nearest collectible")
 options.AutoFarm = farming:AddToggle("AutoFarm", {
-    Title = "Auto farm", Description = "Move to the nearest collectible with an automatic 4-stud spherical hitbox. Pauses outside the round or when your bag is full.", Default = false,
+    Title = "Auto farm", Description = "Move to the nearest collectible with automatic noclip and a 4-stud spherical hitbox. Pauses outside the round or when your bag is full.", Default = false,
     Callback = function(value: boolean)
         settings.AutoFarm = value
         if not value then stopFarm() end
@@ -4352,6 +4884,7 @@ local appearanceDefaults: {[string]: Color3} = {
     Murderer = Color3.fromRGB(255, 78, 100), Sheriff = Color3.fromRGB(77, 164, 255),
     Hero = Color3.fromRGB(255, 159, 62), Innocent = Color3.fromRGB(87, 222, 151),
     Lobby = Color3.fromRGB(174, 181, 193),
+    Zombie = Color3.fromRGB(230, 75, 90), Survivor = Color3.fromRGB(77, 164, 255),
 }
 local themes = {"Dark", "Darker", "Amethyst", "Aqua", "Rose", "Light"}
 local menuKeys = {"RightShift", "LeftAlt", "RightAlt", "F4", "F6", "Insert"}
@@ -4415,7 +4948,7 @@ options.NotificationDuration = interface:AddSlider("NotificationDuration", {
 })
 local highlightColors = SettingsTab:AddSection("Highlight colors")
 local colorPickers: any = {}
-for _, role in ipairs({"Murderer", "Sheriff", "Hero", "Innocent", "Lobby"}) do
+for _, role in ipairs({"Murderer", "Sheriff", "Hero", "Innocent", "Lobby", "Zombie", "Survivor"}) do
     local roleName = role
     local picker = highlightColors:AddColorpicker("Color" .. roleName, {
         Title = if roleName == "Hero" then "Picked-up gun holder" elseif roleName == "Innocent" then "Innocents" else roleName,
@@ -4497,7 +5030,7 @@ api.OnInvoke = function(action: string, argument: any)
         return true
     end
     local rows = {}
-    local counts = {Murderer = 0, Sheriff = 0, Hero = 0, Innocent = 0, Lobby = 0}
+    local counts = {Murderer = 0, Sheriff = 0, Hero = 0, Innocent = 0, Lobby = 0, Zombie = 0, Survivor = 0}
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= localPlayer then
             local role = classify(player)
@@ -4552,9 +5085,9 @@ local function initializeHub()
     if previousError then previousError:Destroy() end
     local selected = selectHub(game.GameId, game.PlaceId)
     startupStage = "Selecting the game hub"
-    if selected then startupStage = "Loading " .. selected .. " · 2026.11.12-universal-1" end
+    if selected then startupStage = "Loading " .. selected .. " · 2026.11.12-universal-2" end
     local result = dispatchHub(game.GameId, game.PlaceId, loadTDSHub, loadMM2Hub)
-    if type(result) == "table" then result.game = selected; result.universalBuild = "2026.11.12-universal-1" end
+    if type(result) == "table" then result.game = selected; result.universalBuild = "2026.11.12-universal-2" end
     return result
 end
 local succeeded, startupResult = xpcall(initializeHub, function(problem: any)
